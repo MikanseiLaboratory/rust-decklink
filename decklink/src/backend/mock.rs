@@ -213,7 +213,7 @@ impl Backend for MockBackend {
         Ok(())
     }
 
-    fn schedule_video(&mut self, token: u64, frame: &ScheduledVideoFrame) -> Result<()> {
+    fn schedule_video(&mut self, token: u64, frame: ScheduledVideoFrame) -> Result<()> {
         frame.validate()?;
         self.scheduled.lock().expect("scheduled").push(token);
         if self.world.complete_immediately {

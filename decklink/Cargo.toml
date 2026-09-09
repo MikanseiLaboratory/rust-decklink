@@ -34,6 +34,7 @@ wgpu = { version = "30.0.1", optional = true, default-features = false, features
 windows = { version = "0.62", features = [
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Memory",
 ] }
 ash = "0.38"
 wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "dx12", "vulkan"] }

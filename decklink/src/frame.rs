@@ -253,6 +253,12 @@ impl Drop for VideoReadGuard<'_> {
 }
 
 /// User-owned frame scheduled for playback.
+///
+/// The hardware backend wraps `bytes` or `gpu.cpu_ptr` with
+/// `CreateVideoFrameWithBuffer` and keeps this value until
+/// `ScheduledFrameCompleted`. If the GPU wrote the buffer through a command
+/// queue, wait for that fence before scheduling so DeckLink does not DMA unread
+/// pixels.
 #[derive(Clone, Debug)]
 pub struct ScheduledVideoFrame {
     pub width: i32,

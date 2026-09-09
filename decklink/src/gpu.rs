@@ -1,9 +1,8 @@
 //! Shared GPU buffers for DeckLink capture / playout.
 //!
-//! DeckLink still needs a CPU pointer (`IDeckLinkVideoBuffer::GetBytes`). On
-//! D3D12 / Metal / Vulkan that pointer is a mapping of the same memory the GPU
-//! sees, so eiviz can wrap the native handle with wgpu HAL the same way it does
-//! for ReBAR / UMA / host-visible ingest.
+//! DeckLink DMA needs a lockable CPU pointer (`IDeckLinkVideoBuffer::GetBytes`).
+//! Buffers are page-aligned host memory (VirtualAlloc / 4 KB). wgpu may import
+//! the same pages; do not pass GPU BAR / `GPU_UPLOAD` addresses to DeckLink.
 
 #![allow(clippy::undocumented_unsafe_blocks)]
 
@@ -15,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use crate::error::{Error, ErrorKind, Result};
 use crate::mode::PixelFormat;
 
+mod pinned;
 #[cfg(feature = "wgpu")]
 mod wgpu_alloc;
 
@@ -141,9 +141,8 @@ impl GpuBufferFactory for CpuSharedFactory {
     }
 
     fn allocate(&self, request: GpuBufferRequest) -> Result<AllocatedGpuBuffer> {
-        let size = request.byte_size.max(1) as usize;
-        let mut bytes = vec![0u8; size];
-        let cpu_ptr = bytes.as_mut_ptr();
+        let host = pinned::PinnedHost::allocate(request.byte_size as usize)?;
+        let (cpu_ptr, size, drop) = host.into_drop();
         Ok(AllocatedGpuBuffer {
             cpu_ptr,
             size,
@@ -152,15 +151,18 @@ impl GpuBufferFactory for CpuSharedFactory {
             wgpu_buffer: None,
             #[cfg(feature = "wgpu")]
             wgpu_texture: None,
-            _cpu: Some(bytes),
-            drop: None,
+            _cpu: None,
+            drop: Some(drop),
         })
     }
 }
 
+const BUFFER_CACHE_LIMIT: usize = 8;
+
 pub(crate) struct GpuRegistry {
     factory: Arc<dyn GpuBufferFactory>,
     live: Mutex<HashMap<usize, LiveGpu>>,
+    cache: Mutex<Vec<AllocatedGpuBuffer>>,
 }
 
 struct LiveGpu {
@@ -173,6 +175,7 @@ impl GpuRegistry {
         Arc::new(Self {
             factory,
             live: Mutex::new(HashMap::new()),
+            cache: Mutex::new(Vec::with_capacity(BUFFER_CACHE_LIMIT)),
         })
     }
 
@@ -182,7 +185,17 @@ impl GpuRegistry {
     }
 
     pub fn allocate(&self, request: GpuBufferRequest) -> Result<(*mut u8, usize)> {
-        let allocated = self.factory.allocate(request)?;
+        let cached = {
+            let mut cache = self.cache.lock().expect("gpu cache");
+            cache
+                .iter()
+                .position(|slot| slot.size == request.byte_size as usize)
+                .map(|index| cache.swap_remove(index))
+        };
+        let allocated = match cached {
+            Some(allocated) => allocated,
+            None => self.factory.allocate(request)?,
+        };
         let cpu_ptr = allocated.cpu_ptr;
         let size = allocated.size;
         if cpu_ptr.is_null() {
@@ -217,7 +230,13 @@ impl GpuRegistry {
     }
 
     pub fn release(&self, cpu: *mut u8) {
-        self.live.lock().expect("gpu registry").remove(&(cpu as usize));
+        let Some(live) = self.live.lock().expect("gpu registry").remove(&(cpu as usize)) else {
+            return;
+        };
+        let mut cache = self.cache.lock().expect("gpu cache");
+        if cache.len() < BUFFER_CACHE_LIMIT {
+            cache.push(live._keep);
+        }
     }
 
     pub fn lookup(&self, cpu: *const u8) -> Option<GpuFrameAccess> {
@@ -284,8 +303,20 @@ mod tests {
             .unwrap();
         assert!(!ptr.is_null());
         assert_eq!(size, 32);
+        assert_eq!(ptr as usize % pinned::PIN_ALIGN, 0);
         assert!(registry.lookup(ptr).is_some());
         registry.release(ptr);
         assert!(registry.lookup(ptr).is_none());
+        let (again, _) = registry
+            .allocate(GpuBufferRequest {
+                width: 8,
+                height: 2,
+                row_bytes: 16,
+                byte_size: 32,
+                pixel_format: PixelFormat::YUV_8BIT,
+            })
+            .unwrap();
+        assert_eq!(again, ptr);
+        registry.release(again);
     }
 }

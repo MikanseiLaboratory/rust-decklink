@@ -1353,8 +1353,27 @@ rdl_hresult rdl_output_create_frame_from_external(
     uint64_t size,
     rdl_handle *frame)
 {
-    if (!cpu) {
+    if (!output || !frame || !cpu) {
         return kInvalidArg;
+    }
+    // Caller owns `cpu` until ScheduledFrameCompleted. Do not attach a free callback.
+    IDeckLinkVideoBuffer *buffer = new (std::nothrow) ExternalVideoBuffer(cpu, size, nullptr, nullptr);
+    if (!buffer) {
+        return kFail;
+    }
+    IDeckLinkMutableVideoFrame *created = nullptr;
+    const HRESULT hr = as<IDeckLinkOutput>(output)->CreateVideoFrameWithBuffer(
+        width,
+        height,
+        row_bytes,
+        static_cast<BMDPixelFormat>(pixel_format),
+        static_cast<BMDFrameFlags>(flags),
+        buffer,
+        &created);
+    buffer->Release();
+    if (hr == S_OK && created) {
+        *frame = created;
+        return kOk;
     }
     return rdl_output_create_frame(
         output,

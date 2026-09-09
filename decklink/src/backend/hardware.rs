@@ -21,9 +21,15 @@ struct InputBridge {
     gpu: Option<std::sync::Arc<GpuRegistry>>,
 }
 
+struct InFlightFrame {
+    handle: decklink_sys::Handle,
+    token: u64,
+    _keep: ScheduledVideoFrame,
+}
+
 struct OutputBridge {
     sink: Box<dyn OutputSink>,
-    in_flight: Mutex<Vec<(decklink_sys::Handle, u64)>>,
+    in_flight: Mutex<Vec<InFlightFrame>>,
 }
 
 pub struct HardwareBackend {
@@ -271,38 +277,27 @@ impl Backend for HardwareBackend {
         Ok(())
     }
 
-    fn schedule_video(&mut self, token: u64, frame: &ScheduledVideoFrame) -> Result<()> {
+    fn schedule_video(&mut self, token: u64, frame: ScheduledVideoFrame) -> Result<()> {
         frame.validate()?;
-        let mut handle = std::ptr::null_mut();
-        if let Some(gpu) = &frame.gpu {
-            Error::check("create_frame_gpu", unsafe {
-                decklink_sys::rdl_output_create_frame_from_external(
-                    self.output,
-                    frame.width,
-                    frame.height,
-                    frame.row_bytes,
-                    frame.pixel_format.0,
-                    frame.flags,
-                    gpu.cpu_ptr as *mut _,
-                    gpu.size as u64,
-                    &mut handle,
-                )
-            })?;
+        let (cpu, size) = if let Some(gpu) = &frame.gpu {
+            (gpu.cpu_ptr as *mut c_void, gpu.size as u64)
         } else {
-            Error::check("create_frame", unsafe {
-                decklink_sys::rdl_output_create_frame(
-                    self.output,
-                    frame.width,
-                    frame.height,
-                    frame.row_bytes,
-                    frame.pixel_format.0,
-                    frame.flags,
-                    frame.bytes.as_ptr(),
-                    frame.bytes.len(),
-                    &mut handle,
-                )
-            })?;
-        }
+            (frame.bytes.as_ptr() as *mut c_void, frame.bytes.len() as u64)
+        };
+        let mut handle = std::ptr::null_mut();
+        Error::check("create_frame", unsafe {
+            decklink_sys::rdl_output_create_frame_from_external(
+                self.output,
+                frame.width,
+                frame.height,
+                frame.row_bytes,
+                frame.pixel_format.0,
+                frame.flags,
+                cpu,
+                size,
+                &mut handle,
+            )
+        })?;
         let hr = unsafe {
             decklink_sys::rdl_output_schedule_video(
                 self.output,
@@ -318,7 +313,11 @@ impl Backend for HardwareBackend {
         }
         if let Some(bridge) = self.output_bridge {
             unsafe {
-                (*bridge).in_flight.lock().expect("in_flight").push((handle, token));
+                (*bridge).in_flight.lock().expect("in_flight").push(InFlightFrame {
+                    handle,
+                    token,
+                    _keep: frame,
+                });
             }
         }
         self.preroll_queued = self.preroll_queued.saturating_add(1);
@@ -365,8 +364,8 @@ impl Backend for HardwareBackend {
         }
         if let Some(bridge) = self.output_bridge.take() {
             unsafe {
-                for (handle, _) in (*bridge).in_flight.lock().expect("in_flight").drain(..) {
-                    decklink_sys::rdl_release(handle);
+                for pending in (*bridge).in_flight.lock().expect("in_flight").drain(..) {
+                    decklink_sys::rdl_release(pending.handle);
                 }
                 drop(Box::from_raw(bridge));
             }
@@ -591,14 +590,14 @@ unsafe extern "C" fn on_output_completed(ctx: *mut c_void, frame: decklink_sys::
         };
         let (token, owned) = {
             let mut in_flight = bridge.in_flight.lock().expect("in_flight");
-            match in_flight.iter().position(|(handle, _)| *handle == frame) {
-                Some(index) => (in_flight.remove(index).1, true),
+            match in_flight.iter().position(|pending| pending.handle == frame) {
+                Some(index) => (in_flight.remove(index).token, true),
                 None => (frame as u64, false),
             }
         };
         if !frame.is_null() {
             if owned {
-                // Drop the CreateVideoFrame ref kept in `in_flight`.
+                // Drop the CreateVideoFrame / CreateVideoFrameWithBuffer ref kept in `in_flight`.
                 decklink_sys::rdl_release(frame);
             }
             // Drop the extra AddRef from ScheduledFrameCompleted.

@@ -53,7 +53,7 @@ pub trait Backend {
     fn start_input(&mut self) -> Result<()>;
     fn stop_input(&mut self) -> Result<()>;
     fn enable_output(&mut self, config: &OutputConfig, sink: Box<dyn OutputSink>) -> Result<()>;
-    fn schedule_video(&mut self, token: u64, frame: &ScheduledVideoFrame) -> Result<()>;
+    fn schedule_video(&mut self, token: u64, frame: ScheduledVideoFrame) -> Result<()>;
     fn schedule_audio(&mut self, packet: &ScheduledAudioPacket) -> Result<u32>;
     fn start_output(&mut self) -> Result<()>;
     fn stop_output(&mut self) -> Result<()>;

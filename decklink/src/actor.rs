@@ -219,7 +219,7 @@ fn dispatch(backend: &mut dyn Backend, command: Command) -> bool {
             true
         }
         Command::ScheduleVideo(token, frame, reply) => {
-            let _ = reply.send(backend.schedule_video(token, &frame));
+            let _ = reply.send(backend.schedule_video(token, frame));
             true
         }
         Command::ScheduleAudio(packet, reply) => {
