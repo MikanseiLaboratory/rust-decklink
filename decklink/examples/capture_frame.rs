@@ -29,7 +29,7 @@ fn main() -> decklink::Result<()> {
             .video(mode.clone(), pixel_format())
             .detect_format(true)
             .queue_capacity(4);
-        builder = attach_gpu(builder, args.gpu)?;
+        builder = attach_gpu(builder, args.gpu, args.wgpu_backend.as_deref())?;
 
         let mut capture = builder.start().await?;
         println!("capture started, waiting for a frame with input source");
@@ -97,7 +97,11 @@ fn main() -> decklink::Result<()> {
     })
 }
 
-fn attach_gpu(builder: decklink::CaptureBuilder, gpu: bool) -> decklink::Result<decklink::CaptureBuilder> {
+fn attach_gpu(
+    builder: decklink::CaptureBuilder,
+    gpu: bool,
+    wgpu_backend: Option<&str>,
+) -> decklink::Result<decklink::CaptureBuilder> {
     if !gpu {
         return Ok(builder);
     }
@@ -107,7 +111,7 @@ fn attach_gpu(builder: decklink::CaptureBuilder, gpu: bool) -> decklink::Result<
 
         use decklink::{GpuBufferFactory, WgpuSharedFactory};
 
-        let (_instance, gpu_device, _queue, backend) = request_wgpu()?;
+        let (_instance, gpu_device, _queue, backend) = support::request_wgpu(wgpu_backend)?;
         let factory = Arc::new(WgpuSharedFactory::new(gpu_device, backend));
         println!("wgpu backend={backend:?} factory={:?}", factory.backend());
         Ok(builder.gpu_buffers(factory))
@@ -115,6 +119,7 @@ fn attach_gpu(builder: decklink::CaptureBuilder, gpu: bool) -> decklink::Result<
     #[cfg(not(feature = "wgpu"))]
     {
         let _ = builder;
+        let _ = wgpu_backend;
         Err(decklink::Error::new(
             decklink::ErrorKind::Unsupported,
             "example",
@@ -125,37 +130,4 @@ fn attach_gpu(builder: decklink::CaptureBuilder, gpu: bool) -> decklink::Result<
 
 fn frame_bytes(frame: &decklink::CapturedVideoFrame) -> decklink::Result<Vec<u8>> {
     Ok(frame.map_read()?.as_bytes().to_vec())
-}
-
-#[cfg(feature = "wgpu")]
-fn request_wgpu() -> decklink::Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
-        backend_options: wgpu::BackendOptions {
-            dx12: wgpu::Dx12BackendOptions {
-                shader_compiler: wgpu::Dx12Compiler::Fxc,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        ..Default::default()
-    }))
-    .map_err(|err| {
-        decklink::Error::new(
-            decklink::ErrorKind::Unsupported,
-            "wgpu",
-            format!("no GPU adapter: {err}"),
-        )
-    })?;
-    let info = adapter.get_info();
-    println!("adapter={} driver={}", info.name, info.driver);
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .map_err(|err| decklink::Error::new(decklink::ErrorKind::Sdk, "wgpu", err.to_string()))?;
-    Ok((instance, device, queue, info.backend))
 }

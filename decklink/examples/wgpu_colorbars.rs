@@ -14,7 +14,7 @@ use support::{
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
     pollster::block_on(async {
-        let (_instance, gpu_device, _queue, backend) = request_wgpu()?;
+        let (_instance, gpu_device, _queue, backend) = support::request_wgpu(args.wgpu_backend.as_deref())?;
         let factory = WgpuSharedFactory::new(gpu_device, backend);
         println!(
             "wgpu backend={:?} storage={:?}",
@@ -112,36 +112,4 @@ fn main() -> decklink::Result<()> {
         drop(slots);
         result
     })
-}
-
-fn request_wgpu() -> decklink::Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
-        backend_options: wgpu::BackendOptions {
-            dx12: wgpu::Dx12BackendOptions {
-                shader_compiler: wgpu::Dx12Compiler::Fxc,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        ..Default::default()
-    }))
-    .map_err(|err| {
-        decklink::Error::new(
-            decklink::ErrorKind::Unsupported,
-            "wgpu",
-            format!("no GPU adapter: {err}"),
-        )
-    })?;
-    let info = adapter.get_info();
-    println!("adapter={} driver={}", info.name, info.driver);
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .map_err(|err| decklink::Error::new(decklink::ErrorKind::Sdk, "wgpu", err.to_string()))?;
-    Ok((instance, device, queue, info.backend))
 }

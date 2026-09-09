@@ -17,6 +17,7 @@ pub struct Args {
     pub out: Option<PathBuf>,
     pub audio: bool,
     pub gpu: bool,
+    pub wgpu_backend: Option<String>,
 }
 
 impl Default for Args {
@@ -30,6 +31,7 @@ impl Default for Args {
             out: None,
             audio: false,
             gpu: false,
+            wgpu_backend: env::var("WGPU_BACKEND").ok().filter(|value| !value.is_empty()),
         }
     }
 }
@@ -46,6 +48,7 @@ pub fn parse_args() -> Result<Args> {
             "--hardware" => args.require_hardware = true,
             "--audio" => args.audio = true,
             "--gpu" => args.gpu = true,
+            "--wgpu-backend" => args.wgpu_backend = Some(parse_next(&mut argv, "--wgpu-backend")?),
             "--device" => {
                 args.device = Some(
                     parse_next(&mut argv, "--device")?
@@ -105,10 +108,11 @@ options:
   --out <path>        output path for capture_frame
   --audio             enable 48 kHz stereo PCM
   --gpu               capture into wgpu shared buffers (needs --features wgpu)
+  --wgpu-backend <b>  vulkan | dx12 | metal (also WGPU_BACKEND)
   --help
 
 env:
-  DECKLINK_SDK_DIR, DECKLINK_REQUIRE_HARDWARE, DECKLINK_DEVICE, DECKLINK_MODE, DECKLINK_SECONDS"
+  DECKLINK_SDK_DIR, DECKLINK_REQUIRE_HARDWARE, DECKLINK_DEVICE, DECKLINK_MODE, DECKLINK_SECONDS, WGPU_BACKEND"
     );
 }
 
@@ -457,4 +461,64 @@ fn fill_uyvy_rect(buf: &mut [u8], (width, height): (usize, usize), (x, y, w, h):
 
 pub fn pixel_format() -> PixelFormat {
     PixelFormat::YUV_8BIT
+}
+
+#[cfg(feature = "wgpu")]
+pub fn parse_wgpu_backend(name: &str) -> Result<wgpu::Backend> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "vulkan" | "vk" => Ok(wgpu::Backend::Vulkan),
+        "dx12" | "d3d12" | "d3d" => Ok(wgpu::Backend::Dx12),
+        "metal" | "mtl" => Ok(wgpu::Backend::Metal),
+        other => Err(Error::new(
+            ErrorKind::InvalidState,
+            "example",
+            format!("unknown --wgpu-backend {other} (vulkan, dx12, metal)"),
+        )),
+    }
+}
+
+/// Keep Vulkan+DX12+Metal enabled, then pick the requested adapter.
+/// Creating a DX12-only instance has hung this machine before.
+#[cfg(feature = "wgpu")]
+pub fn request_wgpu(preferred: Option<&str>) -> Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
+    let preferred = preferred.map(parse_wgpu_backend).transpose()?;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
+        backend_options: wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                shader_compiler: wgpu::Dx12Compiler::Fxc,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = match preferred {
+        Some(want) => {
+            let mut adapters = pollster::block_on(
+                instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL),
+            );
+            adapters.sort_by_key(|adapter| match adapter.get_info().device_type {
+                wgpu::DeviceType::DiscreteGpu => 0u8,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                _ => 2,
+            });
+            adapters
+                .into_iter()
+                .find(|adapter| adapter.get_info().backend == want)
+                .ok_or_else(|| Error::new(ErrorKind::Unsupported, "wgpu", format!("no {want:?} adapter")))?
+        }
+        None => pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            ..Default::default()
+        }))
+        .map_err(|err| Error::new(ErrorKind::Unsupported, "wgpu", format!("no GPU adapter: {err}")))?,
+    };
+    let info = adapter.get_info();
+    println!("adapter={} driver={} wgpu={:?}", info.name, info.driver, info.backend);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .map_err(|err| Error::new(ErrorKind::Sdk, "wgpu", err.to_string()))?;
+    Ok((instance, device, queue, info.backend))
 }
