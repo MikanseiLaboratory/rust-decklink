@@ -279,11 +279,8 @@ impl Backend for HardwareBackend {
 
     fn schedule_video(&mut self, token: u64, frame: ScheduledVideoFrame) -> Result<()> {
         frame.validate()?;
-        let (cpu, size) = if let Some(gpu) = &frame.gpu {
-            (gpu.cpu_ptr as *mut c_void, gpu.size as u64)
-        } else {
-            (frame.bytes.as_ptr() as *mut c_void, frame.bytes.len() as u64)
-        };
+        let (cpu, size) = frame.pixels();
+        let cpu = cpu as *mut c_void;
         let mut handle = std::ptr::null_mut();
         Error::check("create_frame", unsafe {
             decklink_sys::rdl_output_create_frame_from_external(

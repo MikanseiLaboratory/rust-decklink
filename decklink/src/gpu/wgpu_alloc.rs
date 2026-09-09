@@ -27,23 +27,26 @@ impl WgpuSharedFactory {
     pub fn new(device: wgpu::Device, backend: wgpu::Backend) -> Self {
         Self { device, backend }
     }
+
+    /// wgpu adapter this factory was built from. DeckLink storage may still be CPU.
+    pub fn wgpu_backend(&self) -> wgpu::Backend {
+        self.backend
+    }
 }
 
 impl GpuBufferFactory for WgpuSharedFactory {
     fn backend(&self) -> GpuBackend {
-        match self.backend {
-            wgpu::Backend::Dx12 => GpuBackend::D3D12,
-            wgpu::Backend::Metal => GpuBackend::Metal,
-            wgpu::Backend::Vulkan => GpuBackend::Vulkan,
-            _ => GpuBackend::Cpu,
+        // Report the memory DeckLink actually receives, not the wgpu adapter.
+        #[cfg(target_os = "macos")]
+        if self.backend == wgpu::Backend::Metal {
+            return GpuBackend::Metal;
         }
+        GpuBackend::Cpu
     }
 
     fn allocate(&self, request: GpuBufferRequest) -> Result<AllocatedGpuBuffer> {
-        // DeckLink DMA-writes into GetBytes(). D3D12 / Vulkan allocations are not
-        // lockable by the DeckLink bus master (capture comes back black). Always
-        // hand it VirtualAlloc / 4 KB pages first. Metal shared is UMA, so it is
-        // safe to keep as the primary pointer on macOS.
+        // D3D12 / Vulkan mapped heaps are not DeckLink-DMA-safe (capture is black).
+        // Metal shared is UMA, so it can be the primary pointer on macOS.
         #[cfg(target_os = "macos")]
         if self.backend == wgpu::Backend::Metal {
             if let Ok(buffer) = allocate_metal(&self.device, request) {
@@ -85,12 +88,13 @@ fn allocate_metal(device: &wgpu::Device, request: GpuBufferRequest) -> Result<Al
         )
     };
     Ok(AllocatedGpuBuffer {
+        backend: GpuBackend::Metal,
         cpu_ptr,
         size,
         handle,
+        request,
         wgpu_buffer: Some(wgpu_buffer),
         wgpu_texture: None,
-        _cpu: None,
         drop: Some(Box::new(move || {
             drop(raw_buf);
         })),

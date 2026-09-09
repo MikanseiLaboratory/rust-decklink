@@ -273,11 +273,58 @@ pub struct ScheduledVideoFrame {
 }
 
 impl ScheduledVideoFrame {
-    pub fn validate(&self) -> Result<()> {
-        if self.gpu.is_some() {
-            return Ok(());
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_bytes(
+        width: i32,
+        height: i32,
+        row_bytes: i32,
+        pixel_format: PixelFormat,
+        flags: u32,
+        display_time: Time,
+        display_duration: Time,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            row_bytes,
+            pixel_format,
+            flags,
+            display_time,
+            display_duration,
+            bytes,
+            gpu: None,
         }
-        if self.bytes.len() < (self.row_bytes as usize).saturating_mul(self.height as usize) {
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_buffer(
+        width: i32,
+        height: i32,
+        row_bytes: i32,
+        pixel_format: PixelFormat,
+        flags: u32,
+        display_time: Time,
+        display_duration: Time,
+        buffer: GpuFrameAccess,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            row_bytes,
+            pixel_format,
+            flags,
+            display_time,
+            display_duration,
+            bytes: Vec::new(),
+            gpu: Some(buffer),
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let (ptr, len) = self.pixels();
+        let needed = (self.row_bytes as usize).saturating_mul(self.height as usize);
+        if ptr.is_null() || (len as usize) < needed {
             return Err(Error::new(
                 ErrorKind::InvalidState,
                 "schedule_video",
@@ -285,6 +332,14 @@ impl ScheduledVideoFrame {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn pixels(&self) -> (*const u8, u64) {
+        if let Some(gpu) = &self.gpu {
+            (gpu.cpu_ptr, gpu.size as u64)
+        } else {
+            (self.bytes.as_ptr(), self.bytes.len() as u64)
+        }
     }
 }
 

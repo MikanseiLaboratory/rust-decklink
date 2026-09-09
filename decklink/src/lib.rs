@@ -27,7 +27,10 @@ pub use error::{Error, ErrorKind, Hresult, Result};
 pub use frame::{CapturedVideoFrame, FrameCompletion, ScheduledVideoFrame, VideoReadGuard};
 #[cfg(feature = "wgpu")]
 pub use gpu::WgpuSharedFactory;
-pub use gpu::{CpuSharedFactory, GpuBackend, GpuBufferFactory, GpuBufferRequest, GpuFrameAccess, NativeGpuHandle};
+pub use gpu::{
+    AllocatedGpuBuffer, CpuSharedFactory, GpuBackend, GpuBufferFactory, GpuBufferRequest, GpuFrameAccess,
+    NativeGpuHandle,
+};
 pub use mode::{
     DetectedFormat, DisplayMode, DisplayModeId, FieldDominance, PixelFormat, VideoInputFlags, VideoOutputFlags,
 };

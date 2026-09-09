@@ -41,17 +41,16 @@ fn main() -> decklink::Result<()> {
 
         while more_frames(next, total) || in_flight > 0 {
             while in_flight < WINDOW && more_frames(next, total) {
-                let frame = ScheduledVideoFrame {
-                    width: mode.width,
-                    height: mode.height,
+                let frame = ScheduledVideoFrame::from_bytes(
+                    mode.width,
+                    mode.height,
                     row_bytes,
-                    pixel_format: pixel_format(),
-                    flags: 0,
-                    display_time: Time::new(duration.saturating_mul(i64::from(next)), scale)?,
-                    display_duration: mode.frame_duration,
-                    bytes: bytes.clone(),
-                    gpu: None,
-                };
+                    pixel_format(),
+                    0,
+                    Time::new(duration.saturating_mul(i64::from(next)), scale)?,
+                    mode.frame_duration,
+                    bytes.clone(),
+                );
                 let token = playout.schedule_video(frame).await?;
                 if next == 0 {
                     println!("first token={token}");

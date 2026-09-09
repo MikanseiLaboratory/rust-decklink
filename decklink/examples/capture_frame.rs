@@ -124,12 +124,6 @@ fn attach_gpu(builder: decklink::CaptureBuilder, gpu: bool) -> decklink::Result<
 }
 
 fn frame_bytes(frame: &decklink::CapturedVideoFrame) -> decklink::Result<Vec<u8>> {
-    if let Some(gpu) = frame.gpu() {
-        if !gpu.cpu_ptr.is_null() && gpu.size > 0 {
-            // SAFETY: the allocator keeps this mapping alive for the frame lifetime.
-            return Ok(unsafe { std::slice::from_raw_parts(gpu.cpu_ptr, gpu.size) }.to_vec());
-        }
-    }
     Ok(frame.map_read()?.as_bytes().to_vec())
 }
 

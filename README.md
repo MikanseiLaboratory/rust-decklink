@@ -82,7 +82,7 @@ ffplay -f rawvideo -pixel_format uyvy422 -video_size 1920x1080 frame.uyvy
 
 ## GPU バッファ（eiviz / wgpu）
 
-DeckLink の DMA は `IDeckLinkVideoBuffer::GetBytes` の CPU ポインタをロックします。確保はページ境界（Windows は `VirtualAlloc`、他は 4 KB align）です。D3D12 / Metal / Vulkan では、同じホストメモリを wgpu HAL で import できます。GPU BAR / `D3D12_HEAP_TYPE_GPU_UPLOAD` は渡しません。UYVY は width/2 の `Rgba8Unorm` として扱います。
+画素の読み書きは CPU/GPU を意識せず `map_read()` / `AllocatedGpuBuffer::as_mut_slice()` で足ります。DeckLink がロックするのは常に CPU ポインタです。Windows は `VirtualAlloc`、Unix は `posix_memalign(4096)`、macOS Metal は共有ヒープです。GPU BAR / `GPU_UPLOAD` は渡しません。UYVY は width/2 の `Rgba8Unorm` として扱います。
 
 ```rust
 use decklink::{CaptureEvent, CpuSharedFactory, WgpuSharedFactory};
@@ -98,19 +98,18 @@ let mut capture = device
 
 while let Some(Ok(CaptureEvent::Sample(sample))) = capture.next().await {
     if let Some(frame) = &sample.video {
+        let _pixels = frame.map_read()?.as_bytes();
         if let Some(gpu) = frame.gpu() {
-            // gpu.handle: ID3D12Resource* / MTLBuffer* / VkBuffer
-            // gpu.cpu_ptr: DeckLink が DMA した固定ホスト。Windows では VirtualAlloc
-            // gpu.wgpu_buffer: Metal では共有。D3D12 / Vulkan は未 import（cpu_ptr を使う）
+            // 任意: Metal では gpu.wgpu_buffer が同じメモリ。Windows では cpu_ptr のみ。
             let _ = gpu.packed_uyvy_extent();
         }
     }
 }
 ```
 
-`WgpuSharedFactory` は `--features wgpu` です。入力の画素は常にページ固定ホストへ DMA されます。Metal では同じメモリを wgpu に載せます。D3D12 / Vulkan の GPU BAR は DeckLink が書けないので渡しません。自前で確保するなら `GpuBufferFactory` を実装してください。テストと mock は `CpuSharedFactory` で足ります。
+`WgpuSharedFactory` は `--features wgpu` です。`backend()` は DeckLink が見るメモリ種別（Windows / Linux は `Cpu`、macOS Metal は `Metal`）です。wgpu の adapter は `wgpu_backend()` です。自前確保なら `GpuBufferFactory` を実装してください。
 
-再生は `ScheduledVideoFrame.gpu` に同じハンドルを載せると、`CreateVideoFrameWithBuffer` でバッファを wrap します（失敗時だけ SDK 内部フレームへコピーします）。完了 callback までマッピングを保持してください。GPU コマンドで書いた場合は、`ScheduleVideoFrame` の前に fence を待ってください。
+再生は `ScheduledVideoFrame::from_bytes` か `from_buffer` を使います。完了 callback までバッファを保持してください。GPU コマンドで書いた場合は、schedule の前に fence を待ってください。
 
 ## 安全性の要点
 

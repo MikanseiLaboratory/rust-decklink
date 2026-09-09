@@ -1,8 +1,9 @@
-//! Shared GPU buffers for DeckLink capture / playout.
+//! Shared buffers for DeckLink capture / playout.
 //!
-//! DeckLink DMA needs a lockable CPU pointer (`IDeckLinkVideoBuffer::GetBytes`).
-//! Buffers are page-aligned host memory (VirtualAlloc / 4 KB). wgpu may import
-//! the same pages; do not pass GPU BAR / `GPU_UPLOAD` addresses to DeckLink.
+//! Callers always see a CPU pointer. DeckLink DMA-locks that pointer.
+//! Windows uses `VirtualAlloc`, Unix uses `posix_memalign(4096)`, macOS Metal
+//! uses `MTLStorageModeShared`. wgpu may wrap the same pages (Metal today);
+//! GPU BAR / `GPU_UPLOAD` is never given to DeckLink.
 
 #![allow(clippy::undocumented_unsafe_blocks)]
 
@@ -57,36 +58,78 @@ pub struct GpuBufferRequest {
     pub pixel_format: PixelFormat,
 }
 
+impl GpuBufferRequest {
+    /// Packed frame sized as `row_bytes * height`.
+    pub fn packed(width: u32, height: u32, row_bytes: u32, pixel_format: PixelFormat) -> Self {
+        Self {
+            width,
+            height,
+            row_bytes,
+            byte_size: row_bytes.saturating_mul(height.max(1)),
+            pixel_format,
+        }
+    }
+}
+
 /// Allocation returned to the DeckLink allocator callback.
 pub struct AllocatedGpuBuffer {
+    pub backend: GpuBackend,
     pub cpu_ptr: *mut u8,
     pub size: usize,
     pub handle: NativeGpuHandle,
+    request: GpuBufferRequest,
     #[cfg(feature = "wgpu")]
     pub wgpu_buffer: Option<wgpu::Buffer>,
     #[cfg(feature = "wgpu")]
     pub wgpu_texture: Option<wgpu::Texture>,
-    _cpu: Option<Vec<u8>>,
     drop: Option<Box<dyn FnOnce() + Send>>,
 }
 
 unsafe impl Send for AllocatedGpuBuffer {}
 
 impl AllocatedGpuBuffer {
-    pub fn access(&self, request: GpuBufferRequest, backend: GpuBackend) -> GpuFrameAccess {
+    pub(crate) fn pinned(request: GpuBufferRequest) -> Result<Self> {
+        let host = pinned::PinnedHost::allocate(request.byte_size as usize)?;
+        let (cpu_ptr, size, drop) = host.into_drop();
+        Ok(Self {
+            backend: GpuBackend::Cpu,
+            cpu_ptr,
+            size,
+            handle: NativeGpuHandle::None,
+            request,
+            #[cfg(feature = "wgpu")]
+            wgpu_buffer: None,
+            #[cfg(feature = "wgpu")]
+            wgpu_texture: None,
+            drop: Some(drop),
+        })
+    }
+
+    /// Snapshot DeckLink / wgpu can both use. Dimensions come from allocation.
+    pub fn access(&self) -> GpuFrameAccess {
         GpuFrameAccess {
-            backend,
+            backend: self.backend,
             handle: self.handle,
             cpu_ptr: self.cpu_ptr,
             size: self.size,
-            width: request.width,
-            height: request.height,
-            row_bytes: request.row_bytes,
-            pixel_format: request.pixel_format,
+            width: self.request.width,
+            height: self.request.height,
+            row_bytes: self.request.row_bytes,
+            pixel_format: self.request.pixel_format,
             #[cfg(feature = "wgpu")]
             wgpu_buffer: self.wgpu_buffer.clone(),
             #[cfg(feature = "wgpu")]
             wgpu_texture: self.wgpu_texture.clone(),
+        }
+    }
+
+    /// Writable view of the DeckLink-visible bytes.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        if self.cpu_ptr.is_null() {
+            &mut []
+        } else {
+            // SAFETY: `cpu_ptr` is owned by this allocation for `size` bytes.
+            unsafe { std::slice::from_raw_parts_mut(self.cpu_ptr, self.size) }
         }
     }
 }
@@ -141,19 +184,7 @@ impl GpuBufferFactory for CpuSharedFactory {
     }
 
     fn allocate(&self, request: GpuBufferRequest) -> Result<AllocatedGpuBuffer> {
-        let host = pinned::PinnedHost::allocate(request.byte_size as usize)?;
-        let (cpu_ptr, size, drop) = host.into_drop();
-        Ok(AllocatedGpuBuffer {
-            cpu_ptr,
-            size,
-            handle: NativeGpuHandle::None,
-            #[cfg(feature = "wgpu")]
-            wgpu_buffer: None,
-            #[cfg(feature = "wgpu")]
-            wgpu_texture: None,
-            _cpu: None,
-            drop: Some(drop),
-        })
+        AllocatedGpuBuffer::pinned(request)
     }
 }
 
@@ -205,20 +236,7 @@ impl GpuRegistry {
                 "allocator returned a null pointer",
             ));
         }
-        let access = GpuFrameAccess {
-            backend: self.factory.backend(),
-            handle: allocated.handle,
-            cpu_ptr,
-            size,
-            width: request.width,
-            height: request.height,
-            row_bytes: request.row_bytes,
-            pixel_format: request.pixel_format,
-            #[cfg(feature = "wgpu")]
-            wgpu_buffer: allocated.wgpu_buffer.clone(),
-            #[cfg(feature = "wgpu")]
-            wgpu_texture: allocated.wgpu_texture.clone(),
-        };
+        let access = allocated.access();
         self.live.lock().expect("gpu registry").insert(
             cpu_ptr as usize,
             LiveGpu {
@@ -318,5 +336,11 @@ mod tests {
             .unwrap();
         assert_eq!(again, ptr);
         registry.release(again);
+    }
+
+    #[test]
+    fn packed_request_uses_row_times_height() {
+        let request = GpuBufferRequest::packed(8, 2, 16, PixelFormat::YUV_8BIT);
+        assert_eq!(request.byte_size, 32);
     }
 }
