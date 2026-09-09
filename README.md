@@ -66,7 +66,11 @@ cargo run -p decklink --features hardware --example list_devices -- --hardware
 cargo run -p decklink --features hardware --example capture_stats -- --hardware --seconds 10
 cargo run -p decklink --features hardware --example capture_frame -- --hardware --out frame.uyvy
 cargo run -p decklink --features hardware --example scheduled_playout -- --hardware --seconds 10
+cargo run -p decklink --features hardware --example colorbars -- --hardware --seconds 10
+cargo run -p decklink --features hardware,wgpu --example wgpu_colorbars -- --hardware --seconds 10
 ```
+
+`colorbars` と `wgpu_colorbars` は SMPTE RP 219 HD カラーバー、1 kHz（-20 dBFS）ステレオ、水平スクロールを出します。
 
 共通オプションは `--device 0`、`--mode 1080p30`、`--frames 150`、`--audio` です。環境変数 `DECKLINK_DEVICE` / `DECKLINK_MODE` / `DECKLINK_SECONDS` / `DECKLINK_REQUIRE_HARDWARE` でも同じ指定ができます。
 
@@ -78,13 +82,13 @@ ffplay -f rawvideo -pixel_format uyvy422 -video_size 1920x1080 frame.uyvy
 
 ## GPU バッファ（eiviz / wgpu）
 
-DeckLink の `GetBytes` は CPU ポインタを要求します。D3D12 と Metal では、そのポインタを GPU と同じ共有メモリにできます。eiviz mixer の ReBAR / UMA ingest と同じ考え方です。UYVY は width/2 の `Rgba8Unorm` として扱います。
+DeckLink の `GetBytes` は CPU ポインタを要求します。D3D12 / Metal / Vulkan では、そのポインタを GPU と同じ共有メモリにできます。eiviz mixer の ReBAR / UMA / host-visible ingest と同じ考え方です。UYVY は width/2 の `Rgba8Unorm` として扱います。
 
 ```rust
 use decklink::{CaptureEvent, CpuSharedFactory, WgpuSharedFactory};
 use std::sync::Arc;
 
-// eiviz の wgpu::Device を渡す（Windows=Dx12, macOS=Metal）
+// eiviz の wgpu::Device を渡す（Dx12 / Metal / Vulkan）
 let factory = WgpuSharedFactory::new(device.clone(), backend);
 let mut capture = device
     .capture()
@@ -95,7 +99,7 @@ let mut capture = device
 while let Some(Ok(CaptureEvent::Sample(sample))) = capture.next().await {
     if let Some(frame) = &sample.video {
         if let Some(gpu) = frame.gpu() {
-            // gpu.handle: ID3D12Resource* / MTLBuffer*
+            // gpu.handle: ID3D12Resource* / MTLBuffer* / VkBuffer
             // gpu.wgpu_buffer: COPY_SRC。compose テクスチャへ GPU コピーする
             let _ = gpu.packed_uyvy_extent();
         }

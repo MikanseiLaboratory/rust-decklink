@@ -29,6 +29,7 @@ impl GpuBufferFactory for WgpuSharedFactory {
         match self.backend {
             wgpu::Backend::Dx12 => GpuBackend::D3D12,
             wgpu::Backend::Metal => GpuBackend::Metal,
+            wgpu::Backend::Vulkan => GpuBackend::Vulkan,
             _ => GpuBackend::Cpu,
         }
     }
@@ -43,6 +44,12 @@ impl GpuBufferFactory for WgpuSharedFactory {
         #[cfg(target_os = "macos")]
         if self.backend == wgpu::Backend::Metal {
             if let Ok(buffer) = allocate_metal(&self.device, request) {
+                return Ok(buffer);
+            }
+        }
+        #[cfg(any(windows, target_os = "linux"))]
+        if self.backend == wgpu::Backend::Vulkan {
+            if let Ok(buffer) = allocate_vulkan(&self.device, request) {
                 return Ok(buffer);
             }
         }
@@ -200,4 +207,118 @@ fn allocate_metal(device: &wgpu::Device, request: GpuBufferRequest) -> Result<Al
             drop(raw_buf);
         })),
     })
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn allocate_vulkan(device: &wgpu::Device, request: GpuBufferRequest) -> Result<AllocatedGpuBuffer> {
+    use ash::vk;
+    use ash::vk::Handle;
+
+    let (instance, vk_device, physical) = unsafe {
+        device.as_hal::<wgpu::hal::api::Vulkan>().map(|hal| {
+            (
+                hal.shared_instance().raw_instance().clone(),
+                hal.raw_device().clone(),
+                hal.raw_physical_device(),
+            )
+        })
+    }
+    .ok_or_else(|| Error::new(ErrorKind::Unsupported, "wgpu", "device is not Vulkan"))?;
+
+    let bytes = u64::from(request.byte_size.max(1));
+    let info = vk::BufferCreateInfo::default()
+        .size(bytes)
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let buffer = unsafe {
+        vk_device
+            .create_buffer(&info, None)
+            .map_err(|err| Error::new(ErrorKind::Sdk, "vk_buffer", err.to_string()))?
+    };
+    let req = unsafe { vk_device.get_buffer_memory_requirements(buffer) };
+    let props = unsafe { instance.get_physical_device_memory_properties(physical) };
+    let Some(type_index) = find_host_visible_memory(&props, req.memory_type_bits) else {
+        unsafe { vk_device.destroy_buffer(buffer, None) };
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "vk_memory",
+            "no HOST_VISIBLE memory type for a DeckLink buffer",
+        ));
+    };
+    let alloc = vk::MemoryAllocateInfo::default()
+        .allocation_size(req.size)
+        .memory_type_index(type_index);
+    let memory = unsafe {
+        match vk_device.allocate_memory(&alloc, None) {
+            Ok(memory) => memory,
+            Err(err) => {
+                vk_device.destroy_buffer(buffer, None);
+                return Err(Error::new(ErrorKind::Sdk, "vk_memory", err.to_string()));
+            }
+        }
+    };
+    if let Err(err) = unsafe { vk_device.bind_buffer_memory(buffer, memory, 0) } {
+        unsafe {
+            vk_device.free_memory(memory, None);
+            vk_device.destroy_buffer(buffer, None);
+        }
+        return Err(Error::new(ErrorKind::Sdk, "vk_bind", err.to_string()));
+    }
+    let ptr = unsafe {
+        match vk_device.map_memory(memory, 0, req.size, vk::MemoryMapFlags::empty()) {
+            Ok(ptr) => ptr,
+            Err(err) => {
+                vk_device.free_memory(memory, None);
+                vk_device.destroy_buffer(buffer, None);
+                return Err(Error::new(ErrorKind::Sdk, "vk_map", err.to_string()));
+            }
+        }
+    };
+    let handle = NativeGpuHandle::VulkanBuffer(buffer.as_raw());
+    let hal = unsafe { wgpu::hal::vulkan::Buffer::from_raw_managed(buffer, memory, 0, req.size) };
+    let wgpu_buffer = unsafe {
+        device.create_buffer_from_hal::<wgpu::hal::api::Vulkan>(
+            hal,
+            &wgpu::BufferDescriptor {
+                label: Some("decklink vulkan host-visible"),
+                size: req.size,
+                usage: wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            },
+        )
+    };
+    let unmap = vk_device.clone();
+    Ok(AllocatedGpuBuffer {
+        cpu_ptr: ptr.cast(),
+        size: request.byte_size as usize,
+        handle,
+        wgpu_buffer: Some(wgpu_buffer),
+        wgpu_texture: None,
+        _cpu: None,
+        drop: Some(Box::new(move || unsafe {
+            unmap.unmap_memory(memory);
+        })),
+    })
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn find_host_visible_memory(props: &ash::vk::PhysicalDeviceMemoryProperties, type_bits: u32) -> Option<u32> {
+    use ash::vk::MemoryPropertyFlags as Flags;
+    let wanted = [
+        Flags::DEVICE_LOCAL | Flags::HOST_VISIBLE | Flags::HOST_COHERENT,
+        Flags::DEVICE_LOCAL | Flags::HOST_VISIBLE,
+        Flags::HOST_VISIBLE | Flags::HOST_COHERENT,
+        Flags::HOST_VISIBLE,
+    ];
+    for flags in wanted {
+        for (index, mem) in props.memory_types_as_slice().iter().enumerate() {
+            if type_bits & (1 << index) == 0 {
+                continue;
+            }
+            if mem.property_flags.contains(flags) {
+                return Some(index as u32);
+            }
+        }
+    }
+    None
 }

@@ -35,7 +35,12 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi_Common",
 ] }
-wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "dx12"] }
+ash = "0.38"
+wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "dx12", "vulkan"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
+wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "vulkan"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
@@ -69,3 +74,10 @@ name = "capture_frame"
 
 [[example]]
 name = "scheduled_playout"
+
+[[example]]
+name = "colorbars"
+
+[[example]]
+name = "wgpu_colorbars"
+required-features = ["wgpu"]

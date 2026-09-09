@@ -3,7 +3,10 @@
 use std::env;
 use std::path::PathBuf;
 
-use decklink::{DeckLinkContext, Device, DisplayMode, DisplayModeId, Error, ErrorKind, PixelFormat, Result};
+use decklink::{
+    AudioConfig, DeckLinkContext, Device, DisplayMode, DisplayModeId, Error, ErrorKind, PixelFormat, Result,
+    ScheduledAudioPacket, Time,
+};
 
 pub struct Args {
     pub require_hardware: bool,
@@ -188,33 +191,250 @@ pub fn uyvy_row_bytes(width: i32) -> i32 {
     width.saturating_mul(2)
 }
 
-/// 75% colour bars in 8-bit UYVY (`PixelFormat::YUV_8BIT` / `'2vuy'`).
+/// Rec.709 studio-range 8-bit Y'CbCr. Tuple is `(Y, Cb, Cr)`.
+type Yuv = (u8, u8, u8);
+
+const WHITE75: Yuv = (180, 128, 128);
+const RAINBOW_HD: [Yuv; 7] = [
+    WHITE75,
+    (168, 44, 136),
+    (145, 147, 44),
+    (133, 63, 52),
+    (63, 193, 204),
+    (51, 109, 212),
+    (28, 212, 120),
+];
+const WHITE100: Yuv = (235, 128, 128);
+const GRAY40: Yuv = (104, 128, 128);
+const GRAY15: Yuv = (49, 128, 128);
+const CYAN100: Yuv = (188, 154, 16);
+const YELLOW100: Yuv = (219, 16, 138);
+const BLUE100: Yuv = (32, 240, 118);
+const RED100: Yuv = (63, 102, 240);
+const I_PIXEL: Yuv = (57, 156, 97);
+const Q_PIXEL: Yuv = (44, 171, 147);
+const BLACK0: Yuv = (16, 128, 128);
+const BLACK2: Yuv = (20, 128, 128);
+const BLACK4: Yuv = (25, 128, 128);
+const NEG2: Yuv = (12, 128, 128);
+
+/// Horizontal scroll in even pixels / frame so UYVY chroma stays aligned.
+pub const SCROLL_PIXELS_PER_FRAME: i32 = 4;
+
+/// SMPTE RP 219-2002 HD colour bars in 8-bit UYVY (`'2vuy'`).
 pub fn uyvy_color_bars(width: i32, height: i32) -> Vec<u8> {
+    smpte_hd_bars(width, height)
+}
+
+pub fn smpte_hd_bars(width: i32, height: i32) -> Vec<u8> {
+    let width = width.max(2) as usize;
+    let height = height.max(1) as usize;
+    let mut bytes = vec![0u8; width * 2 * height];
+    write_smpte_hd_bars(&mut bytes, width as i32, height as i32);
+    bytes
+}
+
+pub fn write_uyvy_color_bars(dest: &mut [u8], width: i32, height: i32) {
+    write_smpte_hd_bars(dest, width, height);
+}
+
+pub fn write_smpte_hd_bars(dest: &mut [u8], width: i32, height: i32) {
+    let width = width.max(2);
+    let height = height.max(1);
+    let w = width as usize;
+    let h = height as usize;
+    let d_w = align2(width / 8);
+    let top_h = align2(height * 7 / 12);
+    let band_h = align2(height / 12);
+    let r_w = align2((((width + 3) / 4) * 3) / 7);
+
+    fill_uyvy_rect(dest, (w, h), (0, 0, d_w, top_h), GRAY40);
+    let mut x = d_w;
+    for color in RAINBOW_HD {
+        fill_uyvy_rect(dest, (w, h), (x, 0, r_w, top_h), color);
+        x += r_w;
+    }
+    fill_uyvy_rect(dest, (w, h), (x, 0, width - x, top_h), GRAY40);
+
+    let mut y = top_h;
+    fill_uyvy_rect(dest, (w, h), (0, y, d_w, band_h), CYAN100);
+    x = d_w;
+    fill_uyvy_rect(dest, (w, h), (x, y, r_w, band_h), I_PIXEL);
+    x += r_w;
+    let white_w = r_w.saturating_mul(6);
+    fill_uyvy_rect(dest, (w, h), (x, y, white_w, band_h), WHITE75);
+    x += white_w;
+    let pluge_left = x;
+    fill_uyvy_rect(dest, (w, h), (x, y, width - x, band_h), BLUE100);
+
+    y += band_h;
+    fill_uyvy_rect(dest, (w, h), (0, y, d_w, band_h), YELLOW100);
+    x = d_w;
+    fill_uyvy_rect(dest, (w, h), (x, y, r_w, band_h), Q_PIXEL);
+    x += r_w;
+    for i in (0..white_w).step_by(2) {
+        let luma = (i.saturating_mul(255) / white_w.max(1)) as u8;
+        fill_uyvy_rect(dest, (w, h), (x + i, y, 2, band_h), (luma, 128, 128));
+    }
+    x += white_w;
+    fill_uyvy_rect(dest, (w, h), (x, y, width - x, band_h), RED100);
+
+    y += band_h;
+    let bottom_h = height - y;
+    fill_uyvy_rect(dest, (w, h), (0, y, d_w, bottom_h), GRAY15);
+    x = d_w;
+    let mut span = align2(r_w * 3 / 2);
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), BLACK0);
+    x += span;
+    span = align2(r_w * 2);
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), WHITE100);
+    x += span;
+    span = align2(r_w * 5 / 6);
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), BLACK0);
+    x += span;
+    span = align2(r_w / 3);
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), NEG2);
+    x += span;
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), BLACK0);
+    x += span;
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), BLACK2);
+    x += span;
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), BLACK0);
+    x += span;
+    fill_uyvy_rect(dest, (w, h), (x, y, span, bottom_h), BLACK4);
+    x += span;
+    fill_uyvy_rect(dest, (w, h), (x, y, pluge_left - x, bottom_h), BLACK0);
+    x = pluge_left;
+    fill_uyvy_rect(dest, (w, h), (x, y, width - x, bottom_h), GRAY15);
+}
+
+pub fn scroll_pixels(frame: u32, width: i32) -> i32 {
+    let width = width.max(2) & !1;
+    if width <= 0 {
+        return 0;
+    }
+    (i32::try_from(frame)
+        .unwrap_or(i32::MAX)
+        .saturating_mul(SCROLL_PIXELS_PER_FRAME))
+    .rem_euclid(width)
+        & !1
+}
+
+pub fn blit_uyvy_hscroll(dest: &mut [u8], src: &[u8], width: i32, height: i32, scroll_px: i32) {
     let width = width.max(2) as usize;
     let height = height.max(1) as usize;
     let row_bytes = width * 2;
-    let mut bytes = vec![0u8; row_bytes * height];
-    const BARS: [(u8, u8, u8); 8] = [
-        (180, 128, 128),
-        (168, 44, 136),
-        (145, 147, 44),
-        (133, 63, 52),
-        (63, 193, 204),
-        (51, 109, 212),
-        (28, 212, 120),
-        (16, 128, 128),
-    ];
+    let need = row_bytes.saturating_mul(height);
+    if dest.len() < need || src.len() < need {
+        return;
+    }
+    let byte_off = ((scroll_px.rem_euclid(width as i32) as usize) & !1) * 2;
     for y in 0..height {
-        for x in (0..width).step_by(2) {
-            let bar = BARS[x * BARS.len() / width];
-            let offset = y * row_bytes + x * 2;
-            bytes[offset] = bar.1;
-            bytes[offset + 1] = bar.0;
-            bytes[offset + 2] = bar.2;
-            bytes[offset + 3] = bar.0;
+        let row = y * row_bytes;
+        if byte_off == 0 {
+            dest[row..row + row_bytes].copy_from_slice(&src[row..row + row_bytes]);
+        } else {
+            let mid = row + row_bytes - byte_off;
+            dest[row..mid].copy_from_slice(&src[row + byte_off..row + row_bytes]);
+            dest[mid..row + row_bytes].copy_from_slice(&src[row..row + byte_off]);
         }
     }
-    bytes
+}
+
+pub fn playout_audio() -> AudioConfig {
+    AudioConfig::default()
+}
+
+/// Continuous 1 kHz sine at SMPTE alignment level (-20 dBFS), 48 kHz stereo i16.
+pub struct Tone {
+    phase: f64,
+}
+
+impl Tone {
+    pub fn new() -> Self {
+        Self { phase: 0.0 }
+    }
+
+    pub fn packet(&mut self, stream_time: Time, sample_frames: usize, config: AudioConfig) -> ScheduledAudioPacket {
+        let mut bytes = vec![0u8; config.byte_len(sample_frames)];
+        self.fill_i16_stereo(&mut bytes);
+        ScheduledAudioPacket { stream_time, bytes }
+    }
+
+    fn fill_i16_stereo(&mut self, dest: &mut [u8]) {
+        const AMP: f64 = 0.1 * 32767.0;
+        const STEP: f64 = 1_000.0 / 48_000.0;
+        for pair in dest.chunks_exact_mut(4) {
+            let sample = (AMP * (std::f64::consts::TAU * self.phase).sin()) as i16;
+            let le = sample.to_le_bytes();
+            pair[0] = le[0];
+            pair[1] = le[1];
+            pair[2] = le[0];
+            pair[3] = le[1];
+            self.phase += STEP;
+            if self.phase >= 1.0 {
+                self.phase -= 1.0;
+            }
+        }
+    }
+}
+
+pub fn samples_for_video_frame(accum: &mut i64, duration: i64, video_scale: i64, sample_rate: u32) -> usize {
+    if video_scale <= 0 {
+        return 0;
+    }
+    *accum += i64::from(sample_rate) * duration;
+    let count = *accum / video_scale;
+    *accum %= video_scale;
+    count.max(0) as usize
+}
+
+fn align2(value: i32) -> i32 {
+    value.saturating_add(1) & !1
+}
+
+fn fill_uyvy_rect(buf: &mut [u8], (width, height): (usize, usize), (x, y, w, h): (i32, i32, i32, i32), yuv: Yuv) {
+    if w <= 0 || h <= 0 || width < 2 {
+        return;
+    }
+    let x0 = (x.max(0) as usize).min(width) & !1;
+    let y0 = (y.max(0) as usize).min(height);
+    let x1 = (x.saturating_add(w).max(0) as usize).min(width) & !1;
+    let y1 = (y.saturating_add(h).max(0) as usize).min(height);
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let row_bytes = width * 2;
+    let first = y0.saturating_mul(row_bytes);
+    if first >= buf.len() {
+        return;
+    }
+    let (y_luma, cb, cr) = yuv;
+    {
+        let row = &mut buf[first..];
+        for px in (x0..x1).step_by(2) {
+            let offset = px * 2;
+            if offset + 3 >= row.len() {
+                break;
+            }
+            row[offset] = cb;
+            row[offset + 1] = y_luma;
+            row[offset + 2] = cr;
+            row[offset + 3] = y_luma;
+        }
+    }
+    let src = first + x0 * 2;
+    let copy_len = (x1 - x0) * 2;
+    if src + copy_len > buf.len() {
+        return;
+    }
+    for row in (y0 + 1)..y1 {
+        let dest = row * row_bytes + x0 * 2;
+        if dest + copy_len > buf.len() {
+            break;
+        }
+        buf.copy_within(src..src + copy_len, dest);
+    }
 }
 
 pub fn pixel_format() -> PixelFormat {

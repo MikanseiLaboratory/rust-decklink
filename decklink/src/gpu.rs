@@ -1,9 +1,9 @@
 //! Shared GPU buffers for DeckLink capture / playout.
 //!
 //! DeckLink still needs a CPU pointer (`IDeckLinkVideoBuffer::GetBytes`). On
-//! D3D12 / Metal that pointer is a mapping of the same memory the GPU sees, so
-//! eiviz can wrap the native handle with wgpu HAL the same way it does for
-//! ReBAR / UMA ingest.
+//! D3D12 / Metal / Vulkan that pointer is a mapping of the same memory the GPU
+//! sees, so eiviz can wrap the native handle with wgpu HAL the same way it does
+//! for ReBAR / UMA / host-visible ingest.
 
 #![allow(clippy::undocumented_unsafe_blocks)]
 
@@ -27,6 +27,7 @@ pub enum GpuBackend {
     Cpu,
     D3D12,
     Metal,
+    Vulkan,
 }
 
 /// Native resource eiviz can import through wgpu HAL.
@@ -39,6 +40,8 @@ pub enum NativeGpuHandle {
     MetalBuffer(NonNull<c_void>),
     /// `MTLTexture*`.
     MetalTexture(NonNull<c_void>),
+    /// `VkBuffer` handle.
+    VulkanBuffer(u64),
 }
 
 unsafe impl Send for NativeGpuHandle {}
@@ -68,6 +71,25 @@ pub struct AllocatedGpuBuffer {
 }
 
 unsafe impl Send for AllocatedGpuBuffer {}
+
+impl AllocatedGpuBuffer {
+    pub fn access(&self, request: GpuBufferRequest, backend: GpuBackend) -> GpuFrameAccess {
+        GpuFrameAccess {
+            backend,
+            handle: self.handle,
+            cpu_ptr: self.cpu_ptr,
+            size: self.size,
+            width: request.width,
+            height: request.height,
+            row_bytes: request.row_bytes,
+            pixel_format: request.pixel_format,
+            #[cfg(feature = "wgpu")]
+            wgpu_buffer: self.wgpu_buffer.clone(),
+            #[cfg(feature = "wgpu")]
+            wgpu_texture: self.wgpu_texture.clone(),
+        }
+    }
+}
 
 impl Drop for AllocatedGpuBuffer {
     fn drop(&mut self) {
