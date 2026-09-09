@@ -344,18 +344,6 @@ impl Backend for HardwareBackend {
         Ok(written)
     }
 
-    fn begin_audio_preroll(&mut self) -> Result<()> {
-        Error::check("begin_audio_preroll", unsafe {
-            decklink_sys::rdl_output_begin_audio_preroll(self.output)
-        })
-    }
-
-    fn end_audio_preroll(&mut self) -> Result<()> {
-        Error::check("end_audio_preroll", unsafe {
-            decklink_sys::rdl_output_end_audio_preroll(self.output)
-        })
-    }
-
     fn start_output(&mut self) -> Result<()> {
         Error::check("start_output", unsafe {
             decklink_sys::rdl_output_start(self.output, 0, self.output_time_scale, 1.0)

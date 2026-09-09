@@ -19,9 +19,6 @@ enum Command {
     EnableOutput(OutputConfig, Box<dyn OutputSink>, oneshot::Sender<Result<()>>),
     ScheduleVideo(u64, ScheduledVideoFrame, oneshot::Sender<Result<()>>),
     ScheduleAudio(ScheduledAudioPacket, oneshot::Sender<Result<u32>>),
-    BeginAudioPreroll(oneshot::Sender<Result<()>>),
-    EndAudioPreroll(oneshot::Sender<Result<()>>),
-    StartOutput(oneshot::Sender<Result<()>>),
     StopOutput(oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
 }
@@ -145,18 +142,6 @@ impl ActorHandle {
         Ok(rx)
     }
 
-    pub async fn begin_audio_preroll(&self) -> Result<()> {
-        self.request(Command::BeginAudioPreroll).await
-    }
-
-    pub async fn end_audio_preroll(&self) -> Result<()> {
-        self.request(Command::EndAudioPreroll).await
-    }
-
-    pub async fn start_output(&self) -> Result<()> {
-        self.request(Command::StartOutput).await
-    }
-
     pub async fn stop_output(&self) -> Result<()> {
         self.request(Command::StopOutput).await
     }
@@ -239,18 +224,6 @@ fn dispatch(backend: &mut dyn Backend, command: Command) -> bool {
         }
         Command::ScheduleAudio(packet, reply) => {
             let _ = reply.send(backend.schedule_audio(&packet));
-            true
-        }
-        Command::BeginAudioPreroll(reply) => {
-            let _ = reply.send(backend.begin_audio_preroll());
-            true
-        }
-        Command::EndAudioPreroll(reply) => {
-            let _ = reply.send(backend.end_audio_preroll());
-            true
-        }
-        Command::StartOutput(reply) => {
-            let _ = reply.send(backend.start_output());
             true
         }
         Command::StopOutput(reply) => {

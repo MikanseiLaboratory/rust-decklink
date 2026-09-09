@@ -213,17 +213,6 @@ impl Backend for MockBackend {
         Ok((packet.bytes.len() / bytes_per_frame) as u32)
     }
 
-    fn begin_audio_preroll(&mut self) -> Result<()> {
-        if let Some(sink) = &self.output_sink {
-            sink.render_audio(true);
-        }
-        Ok(())
-    }
-
-    fn end_audio_preroll(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     fn start_output(&mut self) -> Result<()> {
         Ok(())
     }
