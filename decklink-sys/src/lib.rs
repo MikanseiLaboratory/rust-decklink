@@ -141,7 +141,7 @@ pub fn failed(hr: HResult) -> bool {
     hr < 0
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn rdl_initialize() -> HResult;
     pub fn rdl_uninitialize();
     pub fn rdl_hardware_available() -> i32;

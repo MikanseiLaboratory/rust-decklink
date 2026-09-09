@@ -2,7 +2,7 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::c_void;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 
 use crate::audio::{AudioConfig, CapturedAudioPacket, ScheduledAudioPacket};

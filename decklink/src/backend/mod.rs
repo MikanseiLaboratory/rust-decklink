@@ -3,12 +3,12 @@ pub mod mock;
 
 use std::sync::Arc;
 
+use crate::DeviceId;
 use crate::audio::{AudioConfig, ScheduledAudioPacket};
 use crate::error::Result;
 use crate::frame::{FrameCompletion, ScheduledVideoFrame};
 use crate::gpu::GpuBufferFactory;
 use crate::mode::{DetectedFormat, DisplayMode, PixelFormat, VideoInputFlags, VideoOutputFlags};
-use crate::DeviceId;
 
 #[derive(Clone, Debug)]
 pub struct DeviceSnapshot {

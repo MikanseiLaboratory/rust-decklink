@@ -1,119 +1,70 @@
 #![allow(dead_code)]
 
-use std::env;
 use std::path::PathBuf;
 
+use clap::{Parser, ValueEnum};
 use decklink::{
     AudioConfig, DeckLinkContext, Device, DisplayMode, DisplayModeId, Error, ErrorKind, PixelFormat, Result,
     ScheduledAudioPacket, Time,
 };
 
+/// Shared flags for the decklink examples.
+#[derive(Debug, Parser)]
+#[command(version, about = "DeckLink capture / playout example")]
 pub struct Args {
+    /// Fail if the DeckLink driver / hardware shim is missing
+    #[arg(long = "hardware", env = "DECKLINK_REQUIRE_HARDWARE")]
     pub require_hardware: bool,
+
+    /// Card index from list_devices
+    #[arg(long, env = "DECKLINK_DEVICE")]
     pub device: Option<usize>,
+
+    /// Display mode substring, e.g. 1080p30 or Hp59
+    #[arg(long, env = "DECKLINK_MODE")]
     pub mode: Option<String>,
+
+    /// Run length (playout: omit for unlimited; capture default: 5)
+    #[arg(long, env = "DECKLINK_SECONDS")]
     pub seconds: Option<f64>,
+
+    /// Stop after N video samples / scheduled frames
+    #[arg(long)]
     pub frames: Option<u32>,
+
+    /// Output path for capture_frame
+    #[arg(long)]
     pub out: Option<PathBuf>,
+
+    /// Enable 48 kHz stereo PCM
+    #[arg(long)]
     pub audio: bool,
+
+    /// Capture into wgpu shared buffers (needs `--features wgpu`)
+    #[arg(long)]
     pub gpu: bool,
-    pub wgpu_backend: Option<String>,
+
+    /// wgpu adapter (`vulkan`, `dx12`, or `metal`; also `WGPU_BACKEND`)
+    #[arg(long, env = "WGPU_BACKEND")]
+    pub wgpu_backend: Option<WgpuBackendArg>,
 }
 
-impl Default for Args {
-    fn default() -> Self {
-        Self {
-            require_hardware: env_truthy("DECKLINK_REQUIRE_HARDWARE"),
-            device: env::var("DECKLINK_DEVICE").ok().and_then(|value| value.parse().ok()),
-            mode: env::var("DECKLINK_MODE").ok().filter(|value| !value.is_empty()),
-            seconds: env::var("DECKLINK_SECONDS").ok().and_then(|value| value.parse().ok()),
-            frames: None,
-            out: None,
-            audio: false,
-            gpu: false,
-            wgpu_backend: env::var("WGPU_BACKEND").ok().filter(|value| !value.is_empty()),
-        }
-    }
+/// wgpu backend selected by `--wgpu-backend` / `WGPU_BACKEND`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum WgpuBackendArg {
+    /// Vulkan
+    #[value(alias = "vk")]
+    Vulkan,
+    /// Direct3D 12
+    #[value(alias = "d3d12", alias = "d3d")]
+    Dx12,
+    /// Metal
+    #[value(alias = "mtl")]
+    Metal,
 }
 
 pub fn parse_args() -> Result<Args> {
-    let mut args = Args::default();
-    let mut argv = env::args().skip(1);
-    while let Some(arg) = argv.next() {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            "--hardware" => args.require_hardware = true,
-            "--audio" => args.audio = true,
-            "--gpu" => args.gpu = true,
-            "--wgpu-backend" => args.wgpu_backend = Some(parse_next(&mut argv, "--wgpu-backend")?),
-            "--device" => {
-                args.device = Some(
-                    parse_next(&mut argv, "--device")?
-                        .parse()
-                        .map_err(|_| Error::new(ErrorKind::InvalidState, "example", "--device must be a number"))?,
-                );
-            }
-            "--mode" => args.mode = Some(parse_next(&mut argv, "--mode")?),
-            "--seconds" => {
-                args.seconds = Some(
-                    parse_next(&mut argv, "--seconds")?
-                        .parse()
-                        .map_err(|_| Error::new(ErrorKind::InvalidState, "example", "--seconds must be a number"))?,
-                );
-            }
-            "--frames" => {
-                args.frames = Some(
-                    parse_next(&mut argv, "--frames")?
-                        .parse()
-                        .map_err(|_| Error::new(ErrorKind::InvalidState, "example", "--frames must be a number"))?,
-                );
-            }
-            "--out" => args.out = Some(PathBuf::from(parse_next(&mut argv, "--out")?)),
-            other => {
-                return Err(Error::new(
-                    ErrorKind::InvalidState,
-                    "example",
-                    format!("unknown argument {other} (see --help)"),
-                ));
-            }
-        }
-    }
-    Ok(args)
-}
-
-fn parse_next(argv: &mut impl Iterator<Item = String>, flag: &str) -> Result<String> {
-    argv.next()
-        .ok_or_else(|| Error::new(ErrorKind::InvalidState, "example", format!("{flag} needs a value")))
-}
-
-fn env_truthy(name: &str) -> bool {
-    matches!(
-        env::var(name).ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE") | Some("yes")
-    )
-}
-
-pub fn print_usage() {
-    eprintln!(
-        "\
-options:
-  --hardware          fail if the DeckLink driver / hardware shim is missing
-  --device <index>    card index from list_devices (default: 0)
-  --mode <name>       display mode substring, e.g. 1080p30 or Hp59
-  --seconds <n>       run length (playout: omit for unlimited; capture default: 5)
-  --frames <n>        stop after N video samples / scheduled frames
-  --out <path>        output path for capture_frame
-  --audio             enable 48 kHz stereo PCM
-  --gpu               capture into wgpu shared buffers (needs --features wgpu)
-  --wgpu-backend <b>  vulkan | dx12 | metal (also WGPU_BACKEND)
-  --help
-
-env:
-  DECKLINK_SDK_DIR, DECKLINK_REQUIRE_HARDWARE, DECKLINK_DEVICE, DECKLINK_MODE, DECKLINK_SECONDS, WGPU_BACKEND"
-    );
+    Ok(Args::parse())
 }
 
 pub fn open_context(args: &Args) -> Result<DeckLinkContext> {
@@ -463,25 +414,17 @@ pub fn pixel_format() -> PixelFormat {
     PixelFormat::YUV_8BIT
 }
 
-#[cfg(feature = "wgpu")]
-pub fn parse_wgpu_backend(name: &str) -> Result<wgpu::Backend> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "vulkan" | "vk" => Ok(wgpu::Backend::Vulkan),
-        "dx12" | "d3d12" | "d3d" => Ok(wgpu::Backend::Dx12),
-        "metal" | "mtl" => Ok(wgpu::Backend::Metal),
-        other => Err(Error::new(
-            ErrorKind::InvalidState,
-            "example",
-            format!("unknown --wgpu-backend {other} (vulkan, dx12, metal)"),
-        )),
-    }
-}
-
 /// Keep Vulkan+DX12+Metal enabled, then pick the requested adapter.
 /// Creating a DX12-only instance has hung this machine before.
 #[cfg(feature = "wgpu")]
-pub fn request_wgpu(preferred: Option<&str>) -> Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
-    let preferred = preferred.map(parse_wgpu_backend).transpose()?;
+pub fn request_wgpu(
+    preferred: Option<WgpuBackendArg>,
+) -> Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
+    let preferred = preferred.map(|backend| match backend {
+        WgpuBackendArg::Vulkan => wgpu::Backend::Vulkan,
+        WgpuBackendArg::Dx12 => wgpu::Backend::Dx12,
+        WgpuBackendArg::Metal => wgpu::Backend::Metal,
+    });
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
         backend_options: wgpu::BackendOptions {

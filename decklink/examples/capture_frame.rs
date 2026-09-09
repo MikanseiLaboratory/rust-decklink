@@ -29,7 +29,7 @@ fn main() -> decklink::Result<()> {
             .video(mode.clone(), pixel_format())
             .detect_format(true)
             .queue_capacity(4);
-        builder = attach_gpu(builder, args.gpu, args.wgpu_backend.as_deref())?;
+        builder = attach_gpu(builder, args.gpu, args.wgpu_backend)?;
 
         let mut capture = builder.start().await?;
         println!("capture started, waiting for a frame with input source");
@@ -67,7 +67,10 @@ fn main() -> decklink::Result<()> {
                             "wrote {} bytes source={} gpu={} (ffplay -f rawvideo -pixel_format uyvy422 -video_size {}x{} {})",
                             bytes.len(),
                             frame.has_input_source(),
-                            frame.gpu().map(|gpu| format!("{:?}", gpu.backend)).unwrap_or_else(|| "none".into()),
+                            frame
+                                .gpu()
+                                .map(|gpu| format!("{:?}", gpu.backend))
+                                .unwrap_or_else(|| "none".into()),
                             frame.width(),
                             frame.height(),
                             out.display()
@@ -100,7 +103,7 @@ fn main() -> decklink::Result<()> {
 fn attach_gpu(
     builder: decklink::CaptureBuilder,
     gpu: bool,
-    wgpu_backend: Option<&str>,
+    wgpu_backend: Option<support::WgpuBackendArg>,
 ) -> decklink::Result<decklink::CaptureBuilder> {
     if !gpu {
         return Ok(builder);

@@ -6,15 +6,14 @@ use decklink::{
 };
 use futures_util::StreamExt;
 use support::{
-    blit_uyvy_hscroll, frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames,
+    Tone, blit_uyvy_hscroll, frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames,
     playout_audio, samples_for_video_frame, scroll_pixels, select_device, select_mode, smpte_hd_bars, uyvy_row_bytes,
-    Tone,
 };
 
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
     pollster::block_on(async {
-        let (_instance, gpu_device, _queue, backend) = support::request_wgpu(args.wgpu_backend.as_deref())?;
+        let (_instance, gpu_device, _queue, backend) = support::request_wgpu(args.wgpu_backend)?;
         let factory = WgpuSharedFactory::new(gpu_device, backend);
         println!(
             "wgpu backend={:?} storage={:?}",

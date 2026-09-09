@@ -18,7 +18,7 @@ mod queue;
 mod state;
 mod time;
 
-pub use audio::{remaining_audio, AudioConfig, CapturedAudioPacket, SampleType, ScheduledAudioPacket};
+pub use audio::{AudioConfig, CapturedAudioPacket, SampleType, ScheduledAudioPacket, remaining_audio};
 pub use backend::mock::{MockAudio, MockCaptureEvent, MockVideo, MockWorld};
 pub use capture::{Capture, CaptureBuilder, CaptureError, CaptureEvent, CaptureSample};
 pub use context::DeckLinkContext;

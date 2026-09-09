@@ -5,7 +5,7 @@
 
 #![allow(clippy::undocumented_unsafe_blocks)]
 
-use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::alloc::{Layout, alloc_zeroed, dealloc};
 
 use crate::error::{Error, ErrorKind, Result};
 
@@ -101,7 +101,7 @@ fn allocate_posix(size: usize) -> Result<PinnedHost> {
 }
 
 #[cfg(unix)]
-extern "C" {
+unsafe extern "C" {
     fn posix_memalign(memptr: *mut *mut std::ffi::c_void, alignment: usize, size: usize) -> i32;
     fn free(ptr: *mut std::ffi::c_void);
 }
@@ -109,7 +109,7 @@ extern "C" {
 #[cfg(windows)]
 fn allocate_virtual(size: usize) -> Result<PinnedHost> {
     use windows::Win32::System::Memory::{
-        VirtualAlloc, VirtualFree, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
     };
 
     let ptr = unsafe { VirtualAlloc(None, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };

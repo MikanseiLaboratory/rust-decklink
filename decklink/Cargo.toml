@@ -51,6 +51,7 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
 wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
 
 [dev-dependencies]
+clap = { version = "4", features = ["derive", "env"] }
 futures-util.workspace = true
 pollster = "0.4"
 tokio = { workspace = true, features = ["rt", "macros", "time"] }

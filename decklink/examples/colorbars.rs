@@ -6,9 +6,8 @@ use decklink::{
 };
 use futures_util::StreamExt;
 use support::{
-    blit_uyvy_hscroll, frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames,
+    Tone, blit_uyvy_hscroll, frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames,
     playout_audio, samples_for_video_frame, scroll_pixels, select_device, select_mode, smpte_hd_bars, uyvy_row_bytes,
-    Tone,
 };
 
 fn main() -> decklink::Result<()> {

@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::actor::{ActorHandle, ActorJoin};
-use crate::backend::mock::{MockBackend, MockWorld};
 use crate::backend::Backend;
+use crate::backend::mock::{MockBackend, MockWorld};
 use crate::device::Device;
 use crate::error::{Error, ErrorKind, Result};
 use crate::mode::DisplayMode;
