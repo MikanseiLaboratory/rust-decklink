@@ -44,10 +44,7 @@ fn main() -> decklink::Result<()> {
                         if !frame.has_input_source() {
                             skipped += 1;
                             if skipped == 1 || skipped % 60 == 0 {
-                                println!(
-                                    "no input source yet skipped={skipped} flags=0x{:08x}",
-                                    frame.flags()
-                                );
+                                println!("no input source yet skipped={skipped} flags=0x{:08x}", frame.flags());
                             }
                             if std::time::Instant::now() > deadline {
                                 return Err(decklink::Error::new(
@@ -100,10 +97,7 @@ fn main() -> decklink::Result<()> {
     })
 }
 
-fn attach_gpu(
-    builder: decklink::CaptureBuilder,
-    gpu: bool,
-) -> decklink::Result<decklink::CaptureBuilder> {
+fn attach_gpu(builder: decklink::CaptureBuilder, gpu: bool) -> decklink::Result<decklink::CaptureBuilder> {
     if !gpu {
         return Ok(builder);
     }

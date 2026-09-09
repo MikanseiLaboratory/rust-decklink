@@ -25,9 +25,7 @@ impl Default for Args {
             require_hardware: env_truthy("DECKLINK_REQUIRE_HARDWARE"),
             device: env::var("DECKLINK_DEVICE").ok().and_then(|value| value.parse().ok()),
             mode: env::var("DECKLINK_MODE").ok().filter(|value| !value.is_empty()),
-            seconds: env::var("DECKLINK_SECONDS")
-                .ok()
-                .and_then(|value| value.parse().ok()),
+            seconds: env::var("DECKLINK_SECONDS").ok().and_then(|value| value.parse().ok()),
             frames: None,
             out: None,
             audio: false,

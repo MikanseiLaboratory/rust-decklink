@@ -3,7 +3,7 @@ mod support;
 
 use decklink::{AudioConfig, CaptureEvent};
 use futures_util::StreamExt;
-use support::{open_context, parse_args, pixel_format, capture_frames, select_device, select_mode};
+use support::{capture_frames, open_context, parse_args, pixel_format, select_device, select_mode};
 
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
