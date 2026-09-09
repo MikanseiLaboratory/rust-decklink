@@ -1,0 +1,43 @@
+[package]
+name = "decklink"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Safe, cross-platform, runtime-agnostic DeckLink capture and playout"
+readme = "../README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+hardware = ["decklink-sys/hardware"]
+tokio = ["dep:tokio"]
+tracing = ["dep:tracing"]
+
+[dependencies]
+bitflags.workspace = true
+decklink-sys = { path = "../decklink-sys" }
+futures-channel.workspace = true
+futures-core.workspace = true
+futures-sink.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+futures-util.workspace = true
+pollster = "0.4"
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[[example]]
+name = "list_devices"
+
+[[example]]
+name = "async_capture"
+
+[[example]]
+name = "scheduled_playout"
