@@ -84,11 +84,6 @@ impl PlayoutBuilder {
                 sink,
             )
             .await?;
-        if self.audio.is_some() {
-            actor.begin_audio_preroll().await?;
-            actor.end_audio_preroll().await?;
-        }
-        actor.start_output().await?;
         Ok(Playout {
             actor,
             events: EventStream::new(events),

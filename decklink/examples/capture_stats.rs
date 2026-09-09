@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use decklink::{AudioConfig, CaptureEvent};
 use futures_util::StreamExt;
-use support::{open_context, parse_args, pixel_format, planned_frames, select_device, select_mode};
+use support::{open_context, parse_args, pixel_format, capture_frames, select_device, select_mode};
 
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
@@ -13,7 +13,7 @@ fn main() -> decklink::Result<()> {
         let context = open_context(&args)?;
         let device = select_device(&context, &args)?;
         let mode = select_mode(&device, &args)?;
-        let target = planned_frames(&args, &mode);
+        let target = capture_frames(&args, &mode);
         println!(
             "stats {} {} target_frames={target} expected_fps={:.3}",
             device.info().display_name,

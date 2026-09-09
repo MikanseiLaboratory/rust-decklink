@@ -4,8 +4,8 @@ mod support;
 use decklink::{FrameCompletion, PlayoutEvent, ScheduledVideoFrame, Time};
 use futures_util::StreamExt;
 use support::{
-    blit_uyvy_hscroll, open_context, parse_args, pixel_format, planned_frames, playout_audio, samples_for_video_frame,
-    scroll_pixels, select_device, select_mode, smpte_hd_bars, uyvy_row_bytes, Tone,
+    blit_uyvy_hscroll, frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames, playout_audio,
+    samples_for_video_frame, scroll_pixels, select_device, select_mode, smpte_hd_bars, uyvy_row_bytes, Tone,
 };
 
 fn main() -> decklink::Result<()> {
@@ -21,11 +21,12 @@ fn main() -> decklink::Result<()> {
         let audio = playout_audio();
         let mut tone = Tone::new();
         println!(
-            "SMPTE HD bars + 1 kHz + scroll → {} {} {}x{} frames={total}",
+            "SMPTE HD bars + 1 kHz + scroll → {} {} {}x{} frames={}",
             device.info().display_name,
             mode.name,
             mode.width,
-            mode.height
+            mode.height,
+            frames_label(total)
         );
 
         let mut playout = device
@@ -42,8 +43,8 @@ fn main() -> decklink::Result<()> {
         let mut sample_accum = 0i64;
         const WINDOW: u32 = 8;
 
-        while next < total || in_flight > 0 {
-            while in_flight < WINDOW && next < total {
+        while more_frames(next, total) || in_flight > 0 {
+            while in_flight < WINDOW && more_frames(next, total) {
                 blit_uyvy_hscroll(
                     &mut frame,
                     &pattern,

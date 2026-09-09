@@ -87,9 +87,9 @@ rdl_hresult copy_sdk_string(char *buf, size_t len, HRESULT hr
     }
     const int needed = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
     std::string utf8;
-    if (needed > 0) {
-        utf8.resize(static_cast<size_t>(needed - 1));
-        WideCharToMultiByte(CP_UTF8, 0, value, -1, utf8.data(), needed, nullptr, nullptr);
+    if (needed > 1) {
+        utf8.assign(static_cast<size_t>(needed - 1), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, value, -1, &utf8[0], needed, nullptr, nullptr);
     }
     SysFreeString(value);
     copy_cstr(buf, len, utf8);
@@ -100,7 +100,7 @@ rdl_hresult copy_sdk_string(char *buf, size_t len, HRESULT hr
     }
     const CFIndex max_size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(value), kCFStringEncodingUTF8) + 1;
     std::string utf8(static_cast<size_t>(max_size), '\0');
-    if (CFStringGetCString(value, utf8.data(), max_size, kCFStringEncodingUTF8)) {
+    if (!utf8.empty() && CFStringGetCString(value, &utf8[0], max_size, kCFStringEncodingUTF8)) {
         utf8.resize(std::strlen(utf8.c_str()));
     } else {
         utf8.clear();
@@ -163,7 +163,7 @@ public:
         if (!m_callbacks.format) {
             return S_OK;
         }
-        rdl_display_mode_info info{};
+        rdl_display_mode_info_t info{};
         if (mode) {
             fill_display_mode(mode, &info);
         }
@@ -734,7 +734,7 @@ public:
     {
     }
 
-    ~ExternalVideoBuffer() override
+    ~ExternalVideoBuffer()
     {
         if (m_free && m_cpu) {
             m_free(m_ctx, m_cpu);
@@ -1104,6 +1104,14 @@ rdl_hresult rdl_video_map_read(rdl_handle frame, const uint8_t **data, size_t *l
     if (hr != S_OK) {
         return static_cast<rdl_hresult>(hr);
     }
+    if (size == 0) {
+        auto *video = as<IDeckLinkVideoFrame>(frame);
+        const int32_t row = video->GetRowBytes();
+        const int32_t height = video->GetHeight();
+        if (row > 0 && height > 0) {
+            size = static_cast<uint64_t>(row) * static_cast<uint64_t>(height);
+        }
+    }
     *data = static_cast<const uint8_t *>(bytes);
     *len = static_cast<size_t>(size);
     return kOk;
@@ -1257,6 +1265,48 @@ rdl_hresult rdl_output_row_bytes(rdl_handle output, uint32_t pixel_format, int32
         static_cast<BMDPixelFormat>(pixel_format), width, row_bytes));
 }
 
+static bool copy_into_mutable_frame(IDeckLinkMutableVideoFrame *created, const uint8_t *data, size_t data_len)
+{
+    if (!created) {
+        return false;
+    }
+    if (!data || data_len == 0) {
+        return true;
+    }
+    IDeckLinkVideoBuffer *buffer = nullptr;
+    if (created->QueryInterface(IID_IDeckLinkVideoBuffer, reinterpret_cast<void **>(&buffer)) != S_OK || !buffer) {
+        return false;
+    }
+    bool copied = false;
+    if (buffer->StartAccess(bmdBufferAccessWrite) == S_OK) {
+        void *bytes = nullptr;
+        if (buffer->GetBytes(&bytes) == S_OK && bytes) {
+            const int32_t row = created->GetRowBytes();
+            const int32_t height = created->GetHeight();
+            size_t cap = 0;
+            if (row > 0 && height > 0) {
+                cap = static_cast<size_t>(row) * static_cast<size_t>(height);
+            }
+            uint64_t reported = 0;
+            buffer->GetSize(&reported);
+            if (reported > 0 && (cap == 0 || static_cast<size_t>(reported) < cap)) {
+                cap = static_cast<size_t>(reported);
+            }
+            if (cap == 0) {
+                cap = data_len;
+            }
+            const size_t copy = data_len < cap ? data_len : cap;
+            if (copy > 0) {
+                std::memcpy(bytes, data, copy);
+                copied = true;
+            }
+        }
+        buffer->EndAccess(bmdBufferAccessWrite);
+    }
+    buffer->Release();
+    return copied;
+}
+
 rdl_hresult rdl_output_create_frame(
     rdl_handle output,
     int32_t width,
@@ -1283,22 +1333,10 @@ rdl_hresult rdl_output_create_frame(
         *frame = nullptr;
         return static_cast<rdl_hresult>(hr);
     }
-    if (data && data_len > 0) {
-        IDeckLinkVideoBuffer *buffer = nullptr;
-        hr = created->QueryInterface(IID_IDeckLinkVideoBuffer, reinterpret_cast<void **>(&buffer));
-        if (hr == S_OK && buffer) {
-            if (buffer->StartAccess(bmdBufferAccessWrite) == S_OK) {
-                void *bytes = nullptr;
-                if (buffer->GetBytes(&bytes) == S_OK && bytes) {
-                    uint64_t size = 0;
-                    buffer->GetSize(&size);
-                    const size_t copy = data_len < static_cast<size_t>(size) ? data_len : static_cast<size_t>(size);
-                    std::memcpy(bytes, data, copy);
-                }
-                buffer->EndAccess(bmdBufferAccessWrite);
-            }
-            buffer->Release();
-        }
+    if (!copy_into_mutable_frame(created, data, data_len)) {
+        created->Release();
+        *frame = nullptr;
+        return kFail;
     }
     *frame = created;
     return kOk;
@@ -1315,29 +1353,19 @@ rdl_hresult rdl_output_create_frame_from_external(
     uint64_t size,
     rdl_handle *frame)
 {
-    if (!output || !frame || !cpu) {
+    if (!cpu) {
         return kInvalidArg;
     }
-    ExternalVideoBuffer *buffer = new (std::nothrow) ExternalVideoBuffer(cpu, size, nullptr, nullptr);
-    if (!buffer) {
-        return static_cast<rdl_hresult>(0x80000002);
-    }
-    IDeckLinkMutableVideoFrame *created = nullptr;
-    const HRESULT hr = as<IDeckLinkOutput>(output)->CreateVideoFrameWithBuffer(
+    return rdl_output_create_frame(
+        output,
         width,
         height,
         row_bytes,
-        static_cast<BMDPixelFormat>(pixel_format),
-        static_cast<BMDFrameFlags>(flags),
-        buffer,
-        &created);
-    buffer->Release();
-    if (hr != S_OK || !created) {
-        *frame = nullptr;
-        return static_cast<rdl_hresult>(hr);
-    }
-    *frame = created;
-    return kOk;
+        pixel_format,
+        flags,
+        static_cast<const uint8_t *>(cpu),
+        static_cast<size_t>(size),
+        frame);
 }
 
 rdl_hresult rdl_output_schedule_video(

@@ -35,6 +35,8 @@ pub struct HardwareBackend {
     output_bridge: Option<*mut OutputBridge>,
     output_audio: Option<AudioConfig>,
     output_time_scale: i64,
+    output_started: bool,
+    preroll_queued: u32,
 }
 
 impl HardwareBackend {
@@ -64,6 +66,8 @@ impl HardwareBackend {
             output_bridge: None,
             output_audio: None,
             output_time_scale: 30_000,
+            output_started: false,
+            preroll_queued: 0,
         })
     }
 }
@@ -234,6 +238,8 @@ impl Backend for HardwareBackend {
         let _ = config.pixel_format;
         self.output_audio = config.audio;
         self.output_time_scale = config.mode.frame_duration.scale.get();
+        self.output_started = false;
+        self.preroll_queued = 0;
         let bridge = Box::into_raw(Box::new(OutputBridge {
             sink,
             in_flight: Mutex::new(Vec::new()),
@@ -315,10 +321,14 @@ impl Backend for HardwareBackend {
                 (*bridge).in_flight.lock().expect("in_flight").push((handle, token));
             }
         }
-        Ok(())
+        self.preroll_queued = self.preroll_queued.saturating_add(1);
+        self.kick_playback_if_ready()
     }
 
     fn schedule_audio(&mut self, packet: &ScheduledAudioPacket) -> Result<u32> {
+        if !self.output_started {
+            return Ok(0);
+        }
         let bytes_per_frame = self.output_audio.unwrap_or_default().bytes_per_frame().max(1);
         let mut written = 0u32;
         Error::check("schedule_audio", unsafe {
@@ -349,10 +359,14 @@ impl Backend for HardwareBackend {
     fn start_output(&mut self) -> Result<()> {
         Error::check("start_output", unsafe {
             decklink_sys::rdl_output_start(self.output, 0, self.output_time_scale, 1.0)
-        })
+        })?;
+        self.output_started = true;
+        Ok(())
     }
 
     fn stop_output(&mut self) -> Result<()> {
+        self.output_started = false;
+        self.preroll_queued = 0;
         if !self.output.is_null() {
             let mut actual = 0i64;
             let _ = unsafe { decklink_sys::rdl_output_stop(self.output, 0, self.output_time_scale, &mut actual) };
@@ -392,6 +406,14 @@ impl Backend for HardwareBackend {
 }
 
 impl HardwareBackend {
+    fn kick_playback_if_ready(&mut self) -> Result<()> {
+        const PREROLL_FRAMES: u32 = 3;
+        if self.output_started || self.preroll_queued < PREROLL_FRAMES {
+            return Ok(());
+        }
+        self.start_output()
+    }
+
     fn ensure_io(&mut self, capture: bool) -> Result<()> {
         if self.device.is_null() {
             return Err(Error::new(ErrorKind::InvalidState, "io", "device is not open"));
@@ -579,14 +601,19 @@ unsafe extern "C" fn on_output_completed(ctx: *mut c_void, frame: decklink_sys::
             }
             return;
         };
-        let token = {
+        let (token, owned) = {
             let mut in_flight = bridge.in_flight.lock().expect("in_flight");
             match in_flight.iter().position(|(handle, _)| *handle == frame) {
-                Some(index) => in_flight.remove(index).1,
-                None => frame as u64,
+                Some(index) => (in_flight.remove(index).1, true),
+                None => (frame as u64, false),
             }
         };
         if !frame.is_null() {
+            if owned {
+                // Drop the CreateVideoFrame ref kept in `in_flight`.
+                decklink_sys::rdl_release(frame);
+            }
+            // Drop the extra AddRef from ScheduledFrameCompleted.
             decklink_sys::rdl_release(frame);
         }
         bridge.sink.completed(token, FrameCompletion::from_raw(result));

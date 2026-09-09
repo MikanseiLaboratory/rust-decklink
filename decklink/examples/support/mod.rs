@@ -12,10 +12,11 @@ pub struct Args {
     pub require_hardware: bool,
     pub device: Option<usize>,
     pub mode: Option<String>,
-    pub seconds: f64,
+    pub seconds: Option<f64>,
     pub frames: Option<u32>,
     pub out: Option<PathBuf>,
     pub audio: bool,
+    pub gpu: bool,
 }
 
 impl Default for Args {
@@ -26,11 +27,11 @@ impl Default for Args {
             mode: env::var("DECKLINK_MODE").ok().filter(|value| !value.is_empty()),
             seconds: env::var("DECKLINK_SECONDS")
                 .ok()
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(5.0),
+                .and_then(|value| value.parse().ok()),
             frames: None,
             out: None,
             audio: false,
+            gpu: false,
         }
     }
 }
@@ -46,6 +47,7 @@ pub fn parse_args() -> Result<Args> {
             }
             "--hardware" => args.require_hardware = true,
             "--audio" => args.audio = true,
+            "--gpu" => args.gpu = true,
             "--device" => {
                 args.device = Some(
                     parse_next(&mut argv, "--device")?
@@ -55,9 +57,11 @@ pub fn parse_args() -> Result<Args> {
             }
             "--mode" => args.mode = Some(parse_next(&mut argv, "--mode")?),
             "--seconds" => {
-                args.seconds = parse_next(&mut argv, "--seconds")?
-                    .parse()
-                    .map_err(|_| Error::new(ErrorKind::InvalidState, "example", "--seconds must be a number"))?;
+                args.seconds = Some(
+                    parse_next(&mut argv, "--seconds")?
+                        .parse()
+                        .map_err(|_| Error::new(ErrorKind::InvalidState, "example", "--seconds must be a number"))?,
+                );
             }
             "--frames" => {
                 args.frames = Some(
@@ -98,10 +102,11 @@ options:
   --hardware          fail if the DeckLink driver / hardware shim is missing
   --device <index>    card index from list_devices (default: 0)
   --mode <name>       display mode substring, e.g. 1080p30 or Hp59
-  --seconds <n>       run length (default: 5, or DECKLINK_SECONDS)
+  --seconds <n>       run length (playout: omit for unlimited; capture default: 5)
   --frames <n>        stop after N video samples / scheduled frames
   --out <path>        output path for capture_frame
   --audio             enable 48 kHz stereo PCM
+  --gpu               capture into wgpu shared buffers (needs --features wgpu)
   --help
 
 env:
@@ -182,9 +187,24 @@ pub fn mode_fps(mode: &DisplayMode) -> f64 {
     mode.frame_duration.scale.get() as f64 / mode.frame_duration.value as f64
 }
 
-pub fn planned_frames(args: &Args, mode: &DisplayMode) -> u32 {
-    args.frames
-        .unwrap_or_else(|| (mode_fps(mode) * args.seconds).ceil().max(1.0) as u32)
+pub fn planned_frames(args: &Args, mode: &DisplayMode) -> Option<u32> {
+    if let Some(frames) = args.frames {
+        return Some(frames);
+    }
+    args.seconds
+        .map(|seconds| (mode_fps(mode) * seconds).ceil().max(1.0) as u32)
+}
+
+pub fn capture_frames(args: &Args, mode: &DisplayMode) -> u32 {
+    planned_frames(args, mode).unwrap_or_else(|| (mode_fps(mode) * 5.0).ceil().max(1.0) as u32)
+}
+
+pub fn more_frames(next: u32, total: Option<u32>) -> bool {
+    total.map(|limit| next < limit).unwrap_or(true)
+}
+
+pub fn frames_label(total: Option<u32>) -> String {
+    total.map(|n| n.to_string()).unwrap_or_else(|| "unlimited".into())
 }
 
 pub fn uyvy_row_bytes(width: i32) -> i32 {

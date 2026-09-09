@@ -6,8 +6,8 @@ use decklink::{
 };
 use futures_util::StreamExt;
 use support::{
-    blit_uyvy_hscroll, open_context, parse_args, pixel_format, planned_frames, playout_audio, samples_for_video_frame,
-    scroll_pixels, select_device, select_mode, smpte_hd_bars, uyvy_row_bytes, Tone,
+    blit_uyvy_hscroll, frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames, playout_audio,
+    samples_for_video_frame, scroll_pixels, select_device, select_mode, smpte_hd_bars, uyvy_row_bytes, Tone,
 };
 
 fn main() -> decklink::Result<()> {
@@ -42,11 +42,12 @@ fn main() -> decklink::Result<()> {
             slots.push((allocated, access));
         }
         println!(
-            "gpu SMPTE HD bars + 1 kHz + scroll → {} {} {}x{} frames={total} slots={WINDOW}",
+            "gpu SMPTE HD bars + 1 kHz + scroll → {} {} {}x{} frames={} slots={WINDOW}",
             device.info().display_name,
             mode.name,
             mode.width,
-            mode.height
+            mode.height,
+            frames_label(total)
         );
 
         let mut playout = device
@@ -62,8 +63,8 @@ fn main() -> decklink::Result<()> {
         let mut completed = 0u32;
         let mut sample_accum = 0i64;
 
-        while next < total || in_flight > 0 {
-            while in_flight < WINDOW as u32 && next < total {
+        while more_frames(next, total) || in_flight > 0 {
+            while in_flight < WINDOW as u32 && more_frames(next, total) {
                 let slot = (next as usize) % WINDOW;
                 {
                     let allocated = &slots[slot].0;
@@ -117,7 +118,7 @@ fn main() -> decklink::Result<()> {
 
 fn request_wgpu() -> decklink::Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::METAL,
+        backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
         backend_options: wgpu::BackendOptions {
             dx12: wgpu::Dx12BackendOptions {
                 shader_compiler: wgpu::Dx12Compiler::Fxc,

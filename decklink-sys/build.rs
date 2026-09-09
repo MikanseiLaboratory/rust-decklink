@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cxx/shim.cpp");
     println!("cargo:rerun-if-env-changed=DECKLINK_SDK_DIR");
     println!("cargo:rerun-if-env-changed=DECKLINK_FORCE_STUB");
+    println!("cargo:rerun-if-env-changed=MIDL");
 
     let hardware = env::var("CARGO_FEATURE_HARDWARE").is_ok();
     if !hardware || env::var("DECKLINK_FORCE_STUB").is_ok() {
@@ -54,8 +55,10 @@ fn compile_hardware(sdk: &Path) -> Result<(), String> {
             let generated = generate_windows_headers(sdk)?;
             build.include(&generated);
             build.include(sdk.join("Win").join("include"));
+            build.file(generated.join("DeckLinkAPI_i.c"));
             println!("cargo:rustc-link-lib=ole32");
             println!("cargo:rustc-link-lib=oleaut32");
+            println!("cargo:rustc-link-lib=rpcrt4");
         }
         "linux" => {
             let include = sdk.join("Linux").join("include");
@@ -96,35 +99,167 @@ fn generate_windows_headers(sdk: &Path) -> Result<PathBuf, String> {
         return Ok(out);
     }
 
-    let midl = find_midl().ok_or("midl.exe not found; install Visual Studio C++ tools")?;
-    let status = Command::new(midl)
-        .args([
-            "/nologo",
-            "/W1",
-            "/char",
-            "signed",
-            "/env",
-            "x64",
-            "/h",
-            "DeckLinkAPI_h.h",
-            "/iid",
-            "DeckLinkAPI_i.c",
-        ])
-        .arg(&idl)
-        .current_dir(&out)
-        .status()
-        .map_err(|err| err.to_string())?;
-    if !status.success() {
-        return Err("midl failed to compile DeckLinkAPI.idl".into());
+    run_midl(&idl, &out)?;
+    if !header.exists() {
+        return Err("midl did not produce DeckLinkAPI_h.h".into());
     }
     Ok(out)
 }
 
+fn windows_idl_arch() -> &'static str {
+    match env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default().as_str() {
+        "x86" => "x86",
+        "aarch64" => "arm64",
+        _ => "x64",
+    }
+}
+
+fn run_midl(idl: &Path, out: &Path) -> Result<(), String> {
+    let arch = windows_idl_arch();
+    if let Some(vcvars) = find_vcvarsall() {
+        let bat = out.join("run_midl.bat");
+        let script = format!(
+            "@echo off\r\n\
+             call \"{vcvars}\" {arch}\r\n\
+             if errorlevel 1 exit /b 1\r\n\
+             midl.exe /nologo /W1 /char signed /env {arch} /h DeckLinkAPI_h.h /iid DeckLinkAPI_i.c \"{idl}\"\r\n",
+            vcvars = vcvars.display(),
+            arch = arch,
+            idl = idl.display()
+        );
+        std::fs::write(&bat, script).map_err(|err| err.to_string())?;
+        return finish_midl(Command::new(&bat).current_dir(out).output(), "via vcvarsall");
+    }
+
+    let midl = find_midl().ok_or("midl.exe not found; install Visual Studio C++ tools")?;
+    let mut cmd = Command::new(&midl);
+    cmd.args([
+        "/nologo",
+        "/W1",
+        "/char",
+        "signed",
+        "/env",
+        arch,
+        "/h",
+        "DeckLinkAPI_h.h",
+        "/iid",
+        "DeckLinkAPI_i.c",
+    ])
+    .arg(idl)
+    .current_dir(out);
+    if let Some(dir) = midl.parent() {
+        prepend_path(&mut cmd, dir);
+    }
+    finish_midl(cmd.output(), "direct")
+}
+
+fn finish_midl(output: std::io::Result<std::process::Output>, how: &str) -> Result<(), String> {
+    let output = output.map_err(|err| err.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .unwrap_or("no output");
+    Err(format!("midl failed to compile DeckLinkAPI.idl ({how}): {detail}"))
+}
+
+fn prepend_path(cmd: &mut Command, dir: &Path) {
+    let mut dirs = vec![dir.to_path_buf()];
+    if let Some(path) = env::var_os("PATH") {
+        dirs.extend(env::split_paths(&path));
+    }
+    if let Ok(joined) = env::join_paths(dirs) {
+        cmd.env("PATH", joined);
+    }
+}
+
+fn find_vcvarsall() -> Option<PathBuf> {
+    let vswhere = find_vswhere()?;
+    let output = Command::new(vswhere)
+        .args([
+            "-latest",
+            "-products",
+            "*",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-find",
+            r"VC\Auxiliary\Build\vcvarsall.bat",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(PathBuf::from)?;
+    path.is_file().then_some(path)
+}
+
+fn find_vswhere() -> Option<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(x86) = env::var("ProgramFiles(x86)") {
+        roots.push(PathBuf::from(x86));
+    }
+    if let Ok(pf) = env::var("ProgramFiles") {
+        roots.push(PathBuf::from(pf));
+    }
+    roots.into_iter().find_map(|root| {
+        let vswhere = root
+            .join("Microsoft Visual Studio")
+            .join("Installer")
+            .join("vswhere.exe");
+        vswhere.is_file().then_some(vswhere)
+    })
+}
+
 fn find_midl() -> Option<PathBuf> {
     if let Ok(path) = env::var("MIDL") {
-        return Some(PathBuf::from(path));
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
     }
-    which("midl.exe").or_else(|| which("midl"))
+    which("midl.exe")
+        .or_else(|| which("midl"))
+        .or_else(find_midl_in_windows_kits)
+}
+
+fn find_midl_in_windows_kits() -> Option<PathBuf> {
+    let arch = windows_idl_arch();
+    let mut bins = Vec::new();
+    if let Ok(x86) = env::var("ProgramFiles(x86)") {
+        bins.push(PathBuf::from(x86).join(r"Windows Kits\10\bin"));
+    }
+    if let Ok(pf) = env::var("ProgramFiles") {
+        bins.push(PathBuf::from(pf).join(r"Windows Kits\10\bin"));
+    }
+
+    let mut found = Vec::new();
+    for bin in bins {
+        let Ok(entries) = std::fs::read_dir(&bin) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("10.") {
+                continue;
+            }
+            let midl = entry.path().join(arch).join("midl.exe");
+            if midl.is_file() {
+                found.push((name.into_owned(), midl));
+            }
+        }
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found.pop().map(|(_, path)| path)
 }
 
 fn which(name: &str) -> Option<PathBuf> {
@@ -155,6 +290,7 @@ fn find_sdk() -> Option<PathBuf> {
     candidates.push(PathBuf::from(
         r"C:\Program Files\Blackmagic Design\Blackmagic DeckLink SDK 16.0",
     ));
+    candidates.push(PathBuf::from(r"C:\Blackmagic DeckLink SDK 16.0"));
     candidates.push(PathBuf::from("/usr/src/decklink-sdk"));
     candidates.push(PathBuf::from("/opt/blackmagic/DeckLinkSDK"));
 

@@ -4,7 +4,8 @@ mod support;
 use decklink::{FrameCompletion, PlayoutEvent, ScheduledVideoFrame, Time};
 use futures_util::StreamExt;
 use support::{
-    open_context, parse_args, pixel_format, planned_frames, select_device, select_mode, uyvy_color_bars, uyvy_row_bytes,
+    frames_label, more_frames, open_context, parse_args, pixel_format, planned_frames, select_device, select_mode,
+    uyvy_color_bars, uyvy_row_bytes,
 };
 
 fn main() -> decklink::Result<()> {
@@ -17,11 +18,12 @@ fn main() -> decklink::Result<()> {
         let row_bytes = uyvy_row_bytes(mode.width);
         let bytes = uyvy_color_bars(mode.width, mode.height);
         println!(
-            "playout {} {} {}x{} frames={total} bars={} bytes",
+            "playout {} {} {}x{} frames={} bars={} bytes",
             device.info().display_name,
             mode.name,
             mode.width,
             mode.height,
+            frames_label(total),
             bytes.len()
         );
 
@@ -37,8 +39,8 @@ fn main() -> decklink::Result<()> {
         let mut flushed = 0u32;
         const WINDOW: u32 = 8;
 
-        while next < total || in_flight > 0 {
-            while in_flight < WINDOW && next < total {
+        while more_frames(next, total) || in_flight > 0 {
+            while in_flight < WINDOW && more_frames(next, total) {
                 let frame = ScheduledVideoFrame {
                     width: mode.width,
                     height: mode.height,

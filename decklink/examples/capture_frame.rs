@@ -16,27 +16,49 @@ fn main() -> decklink::Result<()> {
         let mode = select_mode(&device, &args)?;
         let out = args.out.clone().unwrap_or_else(|| PathBuf::from("frame.uyvy"));
         println!(
-            "writing one {} {}x{} frame to {}",
+            "writing one {} {}x{} frame to {} gpu={}",
             mode.name,
             mode.width,
             mode.height,
-            out.display()
+            out.display(),
+            args.gpu
         );
 
-        let mut capture = device
+        let mut builder = device
             .capture()
             .video(mode.clone(), pixel_format())
             .detect_format(true)
-            .queue_capacity(4)
-            .start()
-            .await?;
+            .queue_capacity(4);
+        builder = attach_gpu(builder, args.gpu)?;
+
+        let mut capture = builder.start().await?;
+        println!("capture started, waiting for a frame with input source");
 
         let mut written = false;
+        let mut skipped = 0u32;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while let Some(event) = capture.next().await {
             match event? {
                 CaptureEvent::Sample(sample) => {
                     if let Some(frame) = sample.video {
-                        let bytes = frame.map_read()?.as_bytes().to_vec();
+                        if !frame.has_input_source() {
+                            skipped += 1;
+                            if skipped == 1 || skipped % 60 == 0 {
+                                println!(
+                                    "no input source yet skipped={skipped} flags=0x{:08x}",
+                                    frame.flags()
+                                );
+                            }
+                            if std::time::Instant::now() > deadline {
+                                return Err(decklink::Error::new(
+                                    decklink::ErrorKind::Disconnected,
+                                    "example",
+                                    format!("no input source after {skipped} frames"),
+                                ));
+                            }
+                            continue;
+                        }
+                        let bytes = frame_bytes(&frame)?;
                         fs::write(&out, &bytes).map_err(|err| {
                             decklink::Error::new(
                                 decklink::ErrorKind::Sdk,
@@ -45,9 +67,10 @@ fn main() -> decklink::Result<()> {
                             )
                         })?;
                         println!(
-                            "wrote {} bytes source={} (ffplay -f rawvideo -pixel_format uyvy422 -video_size {}x{} {})",
+                            "wrote {} bytes source={} gpu={} (ffplay -f rawvideo -pixel_format uyvy422 -video_size {}x{} {})",
                             bytes.len(),
                             frame.has_input_source(),
+                            frame.gpu().map(|gpu| format!("{:?}", gpu.backend)).unwrap_or_else(|| "none".into()),
                             frame.width(),
                             frame.height(),
                             out.display()
@@ -75,4 +98,76 @@ fn main() -> decklink::Result<()> {
             ))
         }
     })
+}
+
+fn attach_gpu(
+    builder: decklink::CaptureBuilder,
+    gpu: bool,
+) -> decklink::Result<decklink::CaptureBuilder> {
+    if !gpu {
+        return Ok(builder);
+    }
+    #[cfg(feature = "wgpu")]
+    {
+        use std::sync::Arc;
+
+        use decklink::{GpuBufferFactory, WgpuSharedFactory};
+
+        let (_instance, gpu_device, _queue, backend) = request_wgpu()?;
+        let factory = Arc::new(WgpuSharedFactory::new(gpu_device, backend));
+        println!("wgpu backend={backend:?} factory={:?}", factory.backend());
+        Ok(builder.gpu_buffers(factory))
+    }
+    #[cfg(not(feature = "wgpu"))]
+    {
+        let _ = builder;
+        Err(decklink::Error::new(
+            decklink::ErrorKind::Unsupported,
+            "example",
+            "--gpu needs `--features wgpu`",
+        ))
+    }
+}
+
+fn frame_bytes(frame: &decklink::CapturedVideoFrame) -> decklink::Result<Vec<u8>> {
+    if let Some(gpu) = frame.gpu() {
+        if !gpu.cpu_ptr.is_null() && gpu.size > 0 {
+            // SAFETY: the allocator keeps this mapping alive for the frame lifetime.
+            return Ok(unsafe { std::slice::from_raw_parts(gpu.cpu_ptr, gpu.size) }.to_vec());
+        }
+    }
+    Ok(frame.map_read()?.as_bytes().to_vec())
+}
+
+#[cfg(feature = "wgpu")]
+fn request_wgpu() -> decklink::Result<(wgpu::Instance, wgpu::Device, wgpu::Queue, wgpu::Backend)> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::METAL,
+        backend_options: wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                shader_compiler: wgpu::Dx12Compiler::Fxc,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        ..Default::default()
+    }))
+    .map_err(|err| {
+        decklink::Error::new(
+            decklink::ErrorKind::Unsupported,
+            "wgpu",
+            format!("no GPU adapter: {err}"),
+        )
+    })?;
+    let info = adapter.get_info();
+    println!("adapter={} driver={}", info.name, info.driver);
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .map_err(|err| decklink::Error::new(decklink::ErrorKind::Sdk, "wgpu", err.to_string()))?;
+    Ok((instance, device, queue, info.backend))
 }

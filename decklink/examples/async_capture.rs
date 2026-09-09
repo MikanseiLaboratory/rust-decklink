@@ -3,7 +3,7 @@ mod support;
 
 use decklink::{AudioConfig, CaptureEvent};
 use futures_util::StreamExt;
-use support::{open_context, parse_args, pixel_format, planned_frames, select_device, select_mode};
+use support::{open_context, parse_args, pixel_format, capture_frames, select_device, select_mode};
 
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
@@ -11,7 +11,7 @@ fn main() -> decklink::Result<()> {
         let context = open_context(&args)?;
         let device = select_device(&context, &args)?;
         let mode = select_mode(&device, &args)?;
-        let frames = planned_frames(&args, &mode);
+        let frames = capture_frames(&args, &mode);
         println!(
             "capture {} [{}] {} {}x{} frames={frames}",
             device.info().display_name,
