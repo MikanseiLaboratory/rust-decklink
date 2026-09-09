@@ -1,0 +1,19 @@
+rust-decklink
+Copyright (c) 2026 Mikansei Laboratory
+
+This crate talks to Blackmagic Design DeckLink hardware through the Desktop
+Video SDK (16.0). The SDK headers, dispatch sources, and runtime libraries are
+not redistributed by this repository. You must obtain the SDK and Desktop Video
+drivers from Blackmagic Design and accept their EULA:
+
+  https://www.blackmagicdesign.com/EULA/DeckLinkSDK
+  https://www.blackmagicdesign.com/desktopvideo_sdk
+
+Set DECKLINK_SDK_DIR to the unpacked SDK root when building with hardware
+support. On Windows the build also needs the Visual Studio C++ toolchain and
+midl.exe so that DeckLinkAPI.idl can be compiled. On Linux the installed
+libDeckLinkAPI.so is loaded at runtime. On macOS the DeckLinkAPI.framework
+bundle is loaded at runtime.
+
+DeckLink, Desktop Video, and Blackmagic Design are trademarks of Blackmagic
+Design Pty Ltd.
