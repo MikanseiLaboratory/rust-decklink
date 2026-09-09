@@ -18,6 +18,8 @@ pub struct DeviceSnapshot {
 pub trait InputSink: Send + Sync {
     fn frame(&self, video: Option<crate::frame::CapturedVideoFrame>, audio: Option<crate::audio::CapturedAudioPacket>);
     fn format_changed(&self, format: DetectedFormat);
+    /// Scripted / hardware end-of-stream. Default is a no-op.
+    fn ended(&self) {}
 }
 
 pub trait OutputSink: Send + Sync {

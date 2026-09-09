@@ -133,7 +133,10 @@ fn overflow_error_and_stop_closes_stream() {
                 break;
             }
         }
-        assert!(saw_overflow);
+        assert!(
+            saw_overflow,
+            "burst mock capture must overflow a 1-slot ErrorAndStop queue"
+        );
         capture.shutdown().await.unwrap();
     });
 }

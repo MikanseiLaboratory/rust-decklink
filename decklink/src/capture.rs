@@ -146,6 +146,10 @@ impl InputSink for CaptureSink {
     fn format_changed(&self, format: DetectedFormat) {
         self.push(Ok(CaptureEvent::FormatChanged(format)));
     }
+
+    fn ended(&self) {
+        self.queue.close();
+    }
 }
 
 impl CaptureSink {

@@ -112,6 +112,47 @@ impl MockBackend {
     }
 }
 
+fn deliver_mock_events(
+    sink: &dyn InputSink,
+    events: &[MockCaptureEvent],
+    stop: &AtomicBool,
+    interval: Option<Duration>,
+) {
+    for event in events {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        match event {
+            MockCaptureEvent::Sample { video, audio } => {
+                let video = video.as_ref().map(|frame| {
+                    CapturedVideoFrame::owned(
+                        frame.width,
+                        frame.height,
+                        frame.row_bytes,
+                        frame.pixel_format,
+                        frame.flags,
+                        frame.stream_time,
+                        None,
+                        frame.bytes.clone(),
+                    )
+                });
+                let audio = audio.as_ref().and_then(|packet| {
+                    CapturedAudioPacket::owned(packet.config, packet.packet_time, packet.bytes.clone()).ok()
+                });
+                sink.frame(video, audio);
+            }
+            MockCaptureEvent::FormatChanged(format) => sink.format_changed(format.clone()),
+            MockCaptureEvent::Disconnect => {
+                stop.store(true, Ordering::Release);
+                break;
+            }
+        }
+        if let Some(interval) = interval {
+            thread::sleep(interval);
+        }
+    }
+}
+
 impl Backend for MockBackend {
     fn enumerate(&mut self) -> Result<Vec<DeviceSnapshot>> {
         Ok(self
@@ -139,42 +180,18 @@ impl Backend for MockBackend {
         let events = self.world.capture_events.clone();
         let interval = self.world.capture_interval;
         let stop = Arc::clone(&self.stop);
+        // Burst scripts run on this thread so overflow tests cannot lose a race
+        // against the consumer and hang on an open, empty queue.
+        if interval.is_none() {
+            deliver_mock_events(sink.as_ref(), &events, &stop, None);
+            sink.ended();
+            return Ok(());
+        }
         thread::Builder::new()
             .name("decklink-mock-capture".into())
             .spawn(move || {
-                for event in events {
-                    if stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    match event {
-                        MockCaptureEvent::Sample { video, audio } => {
-                            let video = video.map(|frame| {
-                                CapturedVideoFrame::owned(
-                                    frame.width,
-                                    frame.height,
-                                    frame.row_bytes,
-                                    frame.pixel_format,
-                                    frame.flags,
-                                    frame.stream_time,
-                                    None,
-                                    frame.bytes,
-                                )
-                            });
-                            let audio = audio.and_then(|packet| {
-                                CapturedAudioPacket::owned(packet.config, packet.packet_time, packet.bytes).ok()
-                            });
-                            sink.frame(video, audio);
-                        }
-                        MockCaptureEvent::FormatChanged(format) => sink.format_changed(format),
-                        MockCaptureEvent::Disconnect => {
-                            stop.store(true, Ordering::Release);
-                            break;
-                        }
-                    }
-                    if let Some(interval) = interval {
-                        thread::sleep(interval);
-                    }
-                }
+                deliver_mock_events(sink.as_ref(), &events, &stop, interval);
+                sink.ended();
             })
             .map_err(|err| Error::new(ErrorKind::Sdk, "mock_capture", err.to_string()))?;
         Ok(())
