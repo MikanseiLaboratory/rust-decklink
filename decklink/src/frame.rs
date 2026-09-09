@@ -3,6 +3,7 @@
 use std::marker::PhantomData;
 
 use crate::error::{Error, ErrorKind, Result};
+use crate::gpu::GpuFrameAccess;
 use crate::mode::PixelFormat;
 use crate::time::Time;
 
@@ -38,11 +39,13 @@ struct OwnedVideo {
     stream_time: Option<Time>,
     hardware_time: Option<Time>,
     bytes: Vec<u8>,
+    gpu: Option<GpuFrameAccess>,
 }
 
 struct HardwareVideo {
     handle: decklink_sys::Handle,
     info: OwnedVideo,
+    gpu: Option<GpuFrameAccess>,
 }
 
 // DeckLink samples pass AddRef'd frames across threads. Concurrent aliasing is
@@ -61,6 +64,31 @@ impl CapturedVideoFrame {
         hardware_time: Option<Time>,
         bytes: Vec<u8>,
     ) -> Self {
+        Self::owned_with_gpu(
+            width,
+            height,
+            row_bytes,
+            pixel_format,
+            flags,
+            stream_time,
+            hardware_time,
+            bytes,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn owned_with_gpu(
+        width: i32,
+        height: i32,
+        row_bytes: i32,
+        pixel_format: PixelFormat,
+        flags: u32,
+        stream_time: Option<Time>,
+        hardware_time: Option<Time>,
+        bytes: Vec<u8>,
+        gpu: Option<GpuFrameAccess>,
+    ) -> Self {
         Self {
             inner: VideoInner::Owned(OwnedVideo {
                 width,
@@ -71,20 +99,36 @@ impl CapturedVideoFrame {
                 stream_time,
                 hardware_time,
                 bytes,
+                gpu,
             }),
         }
     }
 
-    pub(crate) fn from_hardware(handle: decklink_sys::Handle, time_scale: i64) -> Result<Self> {
+    pub(crate) fn from_hardware(
+        handle: decklink_sys::Handle,
+        time_scale: i64,
+        gpu: Option<&crate::gpu::GpuRegistry>,
+    ) -> Result<Self> {
         let mut info = decklink_sys::VideoInfo::default();
         Error::check("video_info", unsafe {
             decklink_sys::rdl_video_info(handle, time_scale, &mut info)
         })?;
         let stream_time = Time::new(info.stream_time, time_scale).ok();
         let hardware_time = Time::new(info.hardware_time, time_scale).ok();
+        let gpu = {
+            let mut ptr = std::ptr::null_mut();
+            let mut size = 0u64;
+            let hr = unsafe { decklink_sys::rdl_video_cpu_ptr(handle, &mut ptr, &mut size) };
+            if decklink_sys::succeeded(hr) {
+                gpu.and_then(|registry| registry.lookup(ptr.cast()))
+            } else {
+                None
+            }
+        };
         Ok(Self {
             inner: VideoInner::Hardware(HardwareVideo {
                 handle,
+                gpu,
                 info: OwnedVideo {
                     width: info.width,
                     height: info.height,
@@ -94,9 +138,17 @@ impl CapturedVideoFrame {
                     stream_time,
                     hardware_time,
                     bytes: Vec::new(),
+                    gpu: None,
                 },
             }),
         })
+    }
+
+    pub fn gpu(&self) -> Option<&GpuFrameAccess> {
+        match &self.inner {
+            VideoInner::Owned(owned) => owned.gpu.as_ref(),
+            VideoInner::Hardware(hw) => hw.gpu.as_ref(),
+        }
     }
 
     pub fn width(&self) -> i32 {
@@ -211,10 +263,14 @@ pub struct ScheduledVideoFrame {
     pub display_time: Time,
     pub display_duration: Time,
     pub bytes: Vec<u8>,
+    pub gpu: Option<GpuFrameAccess>,
 }
 
 impl ScheduledVideoFrame {
     pub fn validate(&self) -> Result<()> {
+        if self.gpu.is_some() {
+            return Ok(());
+        }
         if self.bytes.len() < (self.row_bytes as usize).saturating_mul(self.height as usize) {
             return Err(Error::new(
                 ErrorKind::InvalidState,

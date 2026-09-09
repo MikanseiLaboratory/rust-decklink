@@ -159,6 +159,7 @@ fn playout_reports_completion() {
             display_time: Time::new(0, 30_000).unwrap(),
             display_duration: Time::new(1001, 30_000).unwrap(),
             bytes: vec![0; 32],
+            gpu: None,
         };
         let token = playout.schedule_video(frame).await.unwrap();
         match playout.next().await.unwrap().unwrap() {

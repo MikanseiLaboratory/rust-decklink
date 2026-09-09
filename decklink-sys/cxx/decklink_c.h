@@ -31,6 +31,21 @@ typedef struct rdl_input_callbacks {
     rdl_input_format_fn format;
 } rdl_input_callbacks;
 
+typedef struct rdl_external_buffer {
+    void *cpu;
+    uint64_t size;
+} rdl_external_buffer;
+
+typedef rdl_hresult (*rdl_alloc_video_fn)(
+    void *ctx,
+    uint32_t size,
+    uint32_t width,
+    uint32_t height,
+    uint32_t row_bytes,
+    uint32_t pixel_format,
+    rdl_external_buffer *out);
+typedef void (*rdl_free_video_fn)(void *ctx, void *cpu);
+
 typedef struct rdl_output_callbacks {
     void *ctx;
     rdl_output_completed_fn completed;
@@ -100,6 +115,15 @@ rdl_hresult rdl_input_does_support(
     int32_t *supported);
 rdl_hresult rdl_input_set_callback(rdl_handle input, const rdl_input_callbacks *callbacks);
 rdl_hresult rdl_input_enable_video(rdl_handle input, uint32_t mode, uint32_t pixel_format, uint32_t flags);
+rdl_hresult rdl_input_enable_video_with_allocator(
+    rdl_handle input,
+    uint32_t mode,
+    uint32_t pixel_format,
+    uint32_t flags,
+    void *alloc_ctx,
+    rdl_alloc_video_fn alloc,
+    rdl_free_video_fn free);
+rdl_hresult rdl_video_cpu_ptr(rdl_handle frame, void **ptr, uint64_t *size);
 rdl_hresult rdl_input_disable_video(rdl_handle input);
 rdl_hresult rdl_input_enable_audio(rdl_handle input, uint32_t sample_rate, uint32_t sample_type, uint32_t channels);
 rdl_hresult rdl_input_disable_audio(rdl_handle input);
@@ -144,6 +168,16 @@ rdl_hresult rdl_output_create_frame(
     uint32_t flags,
     const uint8_t *data,
     size_t data_len,
+    rdl_handle *frame);
+rdl_hresult rdl_output_create_frame_from_external(
+    rdl_handle output,
+    int32_t width,
+    int32_t height,
+    int32_t row_bytes,
+    uint32_t pixel_format,
+    uint32_t flags,
+    void *cpu,
+    uint64_t size,
     rdl_handle *frame);
 rdl_hresult rdl_output_schedule_video(
     rdl_handle output,

@@ -116,6 +116,16 @@ pub struct InputCallbacks {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct ExternalBuffer {
+    pub cpu: *mut c_void,
+    pub size: u64,
+}
+
+pub type AllocVideoFn = unsafe extern "C" fn(*mut c_void, u32, u32, u32, u32, u32, *mut ExternalBuffer) -> HResult;
+pub type FreeVideoFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct OutputCallbacks {
     pub ctx: *mut c_void,
     pub completed: Option<unsafe extern "C" fn(*mut c_void, Handle, u32)>,
@@ -162,6 +172,16 @@ extern "C" {
     ) -> HResult;
     pub fn rdl_input_set_callback(input: Handle, callbacks: *const InputCallbacks) -> HResult;
     pub fn rdl_input_enable_video(input: Handle, mode: u32, pixel_format: u32, flags: u32) -> HResult;
+    pub fn rdl_input_enable_video_with_allocator(
+        input: Handle,
+        mode: u32,
+        pixel_format: u32,
+        flags: u32,
+        alloc_ctx: *mut c_void,
+        alloc: AllocVideoFn,
+        free: FreeVideoFn,
+    ) -> HResult;
+    pub fn rdl_video_cpu_ptr(frame: Handle, ptr: *mut *mut c_void, size: *mut u64) -> HResult;
     pub fn rdl_input_disable_video(input: Handle) -> HResult;
     pub fn rdl_input_enable_audio(input: Handle, sample_rate: u32, sample_type: u32, channels: u32) -> HResult;
     pub fn rdl_input_disable_audio(input: Handle) -> HResult;
@@ -206,6 +226,17 @@ extern "C" {
         flags: u32,
         data: *const u8,
         data_len: usize,
+        frame: *mut Handle,
+    ) -> HResult;
+    pub fn rdl_output_create_frame_from_external(
+        output: Handle,
+        width: i32,
+        height: i32,
+        row_bytes: i32,
+        pixel_format: u32,
+        flags: u32,
+        cpu: *mut c_void,
+        size: u64,
         frame: *mut Handle,
     ) -> HResult;
     pub fn rdl_output_schedule_video(

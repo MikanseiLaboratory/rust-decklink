@@ -359,6 +359,12 @@ rdl_hresult rdl_input_does_support(rdl_handle, uint32_t, uint32_t, uint32_t, uin
 }
 rdl_hresult rdl_input_set_callback(rdl_handle, const rdl_input_callbacks *) { return kNotImpl; }
 rdl_hresult rdl_input_enable_video(rdl_handle, uint32_t, uint32_t, uint32_t) { return kNotImpl; }
+rdl_hresult rdl_input_enable_video_with_allocator(
+    rdl_handle, uint32_t, uint32_t, uint32_t, void *, rdl_alloc_video_fn, rdl_free_video_fn)
+{
+    return kNotImpl;
+}
+rdl_hresult rdl_video_cpu_ptr(rdl_handle, void **, uint64_t *) { return kNotImpl; }
 rdl_hresult rdl_input_disable_video(rdl_handle) { return kNotImpl; }
 rdl_hresult rdl_input_enable_audio(rdl_handle, uint32_t, uint32_t, uint32_t) { return kNotImpl; }
 rdl_hresult rdl_input_disable_audio(rdl_handle) { return kNotImpl; }
@@ -384,6 +390,11 @@ rdl_hresult rdl_output_disable_audio(rdl_handle) { return kNotImpl; }
 rdl_hresult rdl_output_row_bytes(rdl_handle, uint32_t, int32_t, int32_t *) { return kNotImpl; }
 rdl_hresult rdl_output_create_frame(
     rdl_handle, int32_t, int32_t, int32_t, uint32_t, uint32_t, const uint8_t *, size_t, rdl_handle *)
+{
+    return kNotImpl;
+}
+rdl_hresult rdl_output_create_frame_from_external(
+    rdl_handle, int32_t, int32_t, int32_t, uint32_t, uint32_t, void *, uint64_t, rdl_handle *)
 {
     return kNotImpl;
 }
@@ -711,6 +722,229 @@ rdl_hresult rdl_input_set_callback(rdl_handle input, const rdl_input_callbacks *
     return static_cast<rdl_hresult>(hr);
 }
 
+class ExternalVideoBuffer final : public IDeckLinkVideoBuffer
+{
+public:
+    ExternalVideoBuffer(void *cpu, uint64_t size, void *ctx, rdl_free_video_fn free_fn)
+        : m_cpu(cpu)
+        , m_size(size)
+        , m_ctx(ctx)
+        , m_free(free_fn)
+        , m_refs(1)
+    {
+    }
+
+    ~ExternalVideoBuffer() override
+    {
+        if (m_free && m_cpu) {
+            m_free(m_ctx, m_cpu);
+        }
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, LPVOID *ppv) override
+    {
+        if (!ppv) {
+            return E_POINTER;
+        }
+        if (iid_eq(iid, IID_IUnknown) || iid_eq(iid, IID_IDeckLinkVideoBuffer)) {
+            *ppv = static_cast<IDeckLinkVideoBuffer *>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return ++m_refs;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG value = --m_refs;
+        if (value == 0) {
+            delete this;
+        }
+        return value;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetBytes(void **buffer) override
+    {
+        if (!buffer) {
+            return E_POINTER;
+        }
+        *buffer = m_cpu;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetSize(uint64_t *size) override
+    {
+        if (!size) {
+            return E_POINTER;
+        }
+        *size = m_size;
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE StartAccess(BMDBufferAccessFlags) override
+    {
+        return S_OK;
+    }
+
+    HRESULT STDMETHODCALLTYPE EndAccess(BMDBufferAccessFlags) override
+    {
+        return S_OK;
+    }
+
+private:
+    void *m_cpu;
+    uint64_t m_size;
+    void *m_ctx;
+    rdl_free_video_fn m_free;
+    std::atomic<ULONG> m_refs;
+};
+
+class CallbackAllocator final : public IDeckLinkVideoBufferAllocator
+{
+public:
+    CallbackAllocator(
+        uint32_t size,
+        uint32_t width,
+        uint32_t height,
+        uint32_t row_bytes,
+        uint32_t format,
+        void *ctx,
+        rdl_alloc_video_fn alloc,
+        rdl_free_video_fn free_fn)
+        : m_size(size)
+        , m_width(width)
+        , m_height(height)
+        , m_row_bytes(row_bytes)
+        , m_format(format)
+        , m_ctx(ctx)
+        , m_alloc(alloc)
+        , m_free(free_fn)
+        , m_refs(1)
+    {
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, LPVOID *ppv) override
+    {
+        if (!ppv) {
+            return E_POINTER;
+        }
+        if (iid_eq(iid, IID_IUnknown) || iid_eq(iid, IID_IDeckLinkVideoBufferAllocator)) {
+            *ppv = static_cast<IDeckLinkVideoBufferAllocator *>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return ++m_refs;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG value = --m_refs;
+        if (value == 0) {
+            delete this;
+        }
+        return value;
+    }
+
+    HRESULT STDMETHODCALLTYPE AllocateVideoBuffer(IDeckLinkVideoBuffer **allocatedBuffer) override
+    {
+        if (!allocatedBuffer || !m_alloc) {
+            return E_POINTER;
+        }
+        rdl_external_buffer slot{};
+        if (m_alloc(m_ctx, m_size, m_width, m_height, m_row_bytes, m_format, &slot) < 0 || !slot.cpu) {
+            return E_OUTOFMEMORY;
+        }
+        const uint64_t size = slot.size != 0 ? slot.size : m_size;
+        *allocatedBuffer = new (std::nothrow) ExternalVideoBuffer(slot.cpu, size, m_ctx, m_free);
+        return *allocatedBuffer ? S_OK : E_OUTOFMEMORY;
+    }
+
+private:
+    uint32_t m_size;
+    uint32_t m_width;
+    uint32_t m_height;
+    uint32_t m_row_bytes;
+    uint32_t m_format;
+    void *m_ctx;
+    rdl_alloc_video_fn m_alloc;
+    rdl_free_video_fn m_free;
+    std::atomic<ULONG> m_refs;
+};
+
+class CallbackAllocatorProvider final : public IDeckLinkVideoBufferAllocatorProvider
+{
+public:
+    CallbackAllocatorProvider(void *ctx, rdl_alloc_video_fn alloc, rdl_free_video_fn free_fn)
+        : m_ctx(ctx)
+        , m_alloc(alloc)
+        , m_free(free_fn)
+        , m_refs(1)
+    {
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, LPVOID *ppv) override
+    {
+        if (!ppv) {
+            return E_POINTER;
+        }
+        if (iid_eq(iid, IID_IUnknown) || iid_eq(iid, IID_IDeckLinkVideoBufferAllocatorProvider)) {
+            *ppv = static_cast<IDeckLinkVideoBufferAllocatorProvider *>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return ++m_refs;
+    }
+
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG value = --m_refs;
+        if (value == 0) {
+            delete this;
+        }
+        return value;
+    }
+
+    HRESULT STDMETHODCALLTYPE GetVideoBufferAllocator(
+        uint32_t bufferSize,
+        uint32_t width,
+        uint32_t height,
+        uint32_t rowBytes,
+        BMDPixelFormat pixelFormat,
+        IDeckLinkVideoBufferAllocator **allocator) override
+    {
+        if (!allocator) {
+            return E_POINTER;
+        }
+        *allocator = new (std::nothrow) CallbackAllocator(
+            bufferSize, width, height, rowBytes, static_cast<uint32_t>(pixelFormat), m_ctx, m_alloc, m_free);
+        return *allocator ? S_OK : E_OUTOFMEMORY;
+    }
+
+private:
+    void *m_ctx;
+    rdl_alloc_video_fn m_alloc;
+    rdl_free_video_fn m_free;
+    std::atomic<ULONG> m_refs;
+};
+
 rdl_hresult rdl_input_enable_video(rdl_handle input, uint32_t mode, uint32_t pixel_format, uint32_t flags)
 {
     if (!input) {
@@ -720,6 +954,58 @@ rdl_hresult rdl_input_enable_video(rdl_handle input, uint32_t mode, uint32_t pix
         static_cast<BMDDisplayMode>(mode),
         static_cast<BMDPixelFormat>(pixel_format),
         static_cast<BMDVideoInputFlags>(flags)));
+}
+
+rdl_hresult rdl_input_enable_video_with_allocator(
+    rdl_handle input,
+    uint32_t mode,
+    uint32_t pixel_format,
+    uint32_t flags,
+    void *alloc_ctx,
+    rdl_alloc_video_fn alloc,
+    rdl_free_video_fn free_fn)
+{
+    if (!input || !alloc) {
+        return kInvalidArg;
+    }
+    CallbackAllocatorProvider *provider = new (std::nothrow) CallbackAllocatorProvider(alloc_ctx, alloc, free_fn);
+    if (!provider) {
+        return static_cast<rdl_hresult>(0x80000002);
+    }
+    const HRESULT hr = as<IDeckLinkInput>(input)->EnableVideoInputWithAllocatorProvider(
+        static_cast<BMDDisplayMode>(mode),
+        static_cast<BMDPixelFormat>(pixel_format),
+        static_cast<BMDVideoInputFlags>(flags),
+        provider);
+    provider->Release();
+    return static_cast<rdl_hresult>(hr);
+}
+
+rdl_hresult rdl_video_cpu_ptr(rdl_handle frame, void **ptr, uint64_t *size)
+{
+    if (!frame || !ptr) {
+        return kInvalidArg;
+    }
+    IDeckLinkVideoBuffer *buffer = nullptr;
+    const HRESULT hr = as_unknown(frame)->QueryInterface(IID_IDeckLinkVideoBuffer, reinterpret_cast<void **>(&buffer));
+    if (hr != S_OK || !buffer) {
+        return static_cast<rdl_hresult>(hr != S_OK ? hr : kNoInterface);
+    }
+    void *bytes = nullptr;
+    HRESULT access = buffer->StartAccess(bmdBufferAccessRead);
+    if (access == S_OK) {
+        access = buffer->GetBytes(&bytes);
+        if (size) {
+            buffer->GetSize(size);
+        }
+        buffer->EndAccess(bmdBufferAccessRead);
+    }
+    buffer->Release();
+    if (access != S_OK) {
+        return static_cast<rdl_hresult>(access);
+    }
+    *ptr = bytes;
+    return kOk;
 }
 
 rdl_hresult rdl_input_disable_video(rdl_handle input)
@@ -1013,6 +1299,42 @@ rdl_hresult rdl_output_create_frame(
             }
             buffer->Release();
         }
+    }
+    *frame = created;
+    return kOk;
+}
+
+rdl_hresult rdl_output_create_frame_from_external(
+    rdl_handle output,
+    int32_t width,
+    int32_t height,
+    int32_t row_bytes,
+    uint32_t pixel_format,
+    uint32_t flags,
+    void *cpu,
+    uint64_t size,
+    rdl_handle *frame)
+{
+    if (!output || !frame || !cpu) {
+        return kInvalidArg;
+    }
+    ExternalVideoBuffer *buffer = new (std::nothrow) ExternalVideoBuffer(cpu, size, nullptr, nullptr);
+    if (!buffer) {
+        return static_cast<rdl_hresult>(0x80000002);
+    }
+    IDeckLinkMutableVideoFrame *created = nullptr;
+    const HRESULT hr = as<IDeckLinkOutput>(output)->CreateVideoFrameWithBuffer(
+        width,
+        height,
+        row_bytes,
+        static_cast<BMDPixelFormat>(pixel_format),
+        static_cast<BMDFrameFlags>(flags),
+        buffer,
+        &created);
+    buffer->Release();
+    if (hr != S_OK || !created) {
+        *frame = nullptr;
+        return static_cast<rdl_hresult>(hr);
     }
     *frame = created;
     return kOk;

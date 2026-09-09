@@ -10,6 +10,7 @@ use crate::backend::{Backend, DeviceSnapshot, InputConfig, InputSink, OutputConf
 use crate::device::{DeviceId, DeviceInfo};
 use crate::error::{Error, ErrorKind, Hresult, Result};
 use crate::frame::{CapturedVideoFrame, FrameCompletion, ScheduledVideoFrame};
+use crate::gpu::GpuRegistry;
 use crate::mode::{DetectedFormat, DisplayMode, DisplayModeId, FieldDominance};
 use crate::time::Time;
 
@@ -17,6 +18,7 @@ struct InputBridge {
     sink: Box<dyn InputSink>,
     audio: Option<AudioConfig>,
     time_scale: i64,
+    gpu: Option<std::sync::Arc<GpuRegistry>>,
 }
 
 struct OutputBridge {
@@ -155,10 +157,15 @@ impl Backend for HardwareBackend {
 
     fn enable_input(&mut self, config: &InputConfig, sink: Box<dyn InputSink>) -> Result<()> {
         self.ensure_io(true)?;
+        let gpu = config
+            .gpu
+            .as_ref()
+            .map(|factory| GpuRegistry::new(std::sync::Arc::clone(factory)));
         let bridge = Box::into_raw(Box::new(InputBridge {
             sink,
             audio: config.audio,
             time_scale: config.time_scale,
+            gpu,
         }));
         self.input_bridge = Some(bridge);
         let callbacks = decklink_sys::InputCallbacks {
@@ -169,9 +176,28 @@ impl Backend for HardwareBackend {
         Error::check("input_set_callback", unsafe {
             decklink_sys::rdl_input_set_callback(self.input, &callbacks)
         })?;
-        Error::check("input_enable_video", unsafe {
-            decklink_sys::rdl_input_enable_video(self.input, config.mode.id.0, config.pixel_format.0, config.flags.0)
-        })?;
+        if let Some(registry) = unsafe { (*bridge).gpu.as_ref() } {
+            Error::check("input_enable_video_allocator", unsafe {
+                decklink_sys::rdl_input_enable_video_with_allocator(
+                    self.input,
+                    config.mode.id.0,
+                    config.pixel_format.0,
+                    config.flags.0,
+                    std::sync::Arc::as_ptr(registry) as *mut _,
+                    crate::gpu::alloc_video_buffer,
+                    crate::gpu::free_video_buffer,
+                )
+            })?;
+        } else {
+            Error::check("input_enable_video", unsafe {
+                decklink_sys::rdl_input_enable_video(
+                    self.input,
+                    config.mode.id.0,
+                    config.pixel_format.0,
+                    config.flags.0,
+                )
+            })?;
+        }
         if let Some(audio) = config.audio {
             Error::check("input_enable_audio", unsafe {
                 decklink_sys::rdl_input_enable_audio(
@@ -242,19 +268,35 @@ impl Backend for HardwareBackend {
     fn schedule_video(&mut self, token: u64, frame: &ScheduledVideoFrame) -> Result<()> {
         frame.validate()?;
         let mut handle = std::ptr::null_mut();
-        Error::check("create_frame", unsafe {
-            decklink_sys::rdl_output_create_frame(
-                self.output,
-                frame.width,
-                frame.height,
-                frame.row_bytes,
-                frame.pixel_format.0,
-                frame.flags,
-                frame.bytes.as_ptr(),
-                frame.bytes.len(),
-                &mut handle,
-            )
-        })?;
+        if let Some(gpu) = &frame.gpu {
+            Error::check("create_frame_gpu", unsafe {
+                decklink_sys::rdl_output_create_frame_from_external(
+                    self.output,
+                    frame.width,
+                    frame.height,
+                    frame.row_bytes,
+                    frame.pixel_format.0,
+                    frame.flags,
+                    gpu.cpu_ptr as *mut _,
+                    gpu.size as u64,
+                    &mut handle,
+                )
+            })?;
+        } else {
+            Error::check("create_frame", unsafe {
+                decklink_sys::rdl_output_create_frame(
+                    self.output,
+                    frame.width,
+                    frame.height,
+                    frame.row_bytes,
+                    frame.pixel_format.0,
+                    frame.flags,
+                    frame.bytes.as_ptr(),
+                    frame.bytes.len(),
+                    &mut handle,
+                )
+            })?;
+        }
         let hr = unsafe {
             decklink_sys::rdl_output_schedule_video(
                 self.output,
@@ -471,7 +513,7 @@ unsafe extern "C" fn on_input_frame(ctx: *mut c_void, video: decklink_sys::Handl
         let video = if video.is_null() {
             None
         } else {
-            match CapturedVideoFrame::from_hardware(video, bridge.time_scale) {
+            match CapturedVideoFrame::from_hardware(video, bridge.time_scale, bridge.gpu.as_deref()) {
                 Ok(frame) => Some(frame),
                 Err(_) => {
                     decklink_sys::rdl_release(video);

@@ -1,9 +1,12 @@
 pub mod hardware;
 pub mod mock;
 
+use std::sync::Arc;
+
 use crate::audio::{AudioConfig, ScheduledAudioPacket};
 use crate::error::Result;
 use crate::frame::{FrameCompletion, ScheduledVideoFrame};
+use crate::gpu::GpuBufferFactory;
 use crate::mode::{DetectedFormat, DisplayMode, PixelFormat, VideoInputFlags, VideoOutputFlags};
 use crate::DeviceId;
 
@@ -29,6 +32,7 @@ pub struct InputConfig {
     pub flags: VideoInputFlags,
     pub audio: Option<AudioConfig>,
     pub time_scale: i64,
+    pub gpu: Option<Arc<dyn GpuBufferFactory>>,
 }
 
 pub struct OutputConfig {

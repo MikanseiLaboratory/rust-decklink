@@ -10,6 +10,7 @@ use crate::backend::{InputConfig, InputSink};
 use crate::device::Device;
 use crate::error::{Error, ErrorKind, Result};
 use crate::frame::CapturedVideoFrame;
+use crate::gpu::GpuBufferFactory;
 use crate::mode::{DetectedFormat, DisplayMode, PixelFormat, VideoInputFlags};
 use crate::queue::{EventQueue, EventStream, OverflowInfo, OverflowPolicy};
 use crate::state::SessionState;
@@ -23,6 +24,7 @@ pub struct CaptureSample {
 
 /// Capture stream item.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum CaptureEvent {
     Sample(CaptureSample),
     FormatChanged(DetectedFormat),
@@ -40,6 +42,7 @@ pub struct CaptureBuilder {
     audio: Option<AudioConfig>,
     queue_capacity: usize,
     overflow: OverflowPolicy,
+    gpu: Option<Arc<dyn GpuBufferFactory>>,
 }
 
 impl CaptureBuilder {
@@ -52,6 +55,7 @@ impl CaptureBuilder {
             audio: None,
             queue_capacity: 4,
             overflow: OverflowPolicy::DropOldest,
+            gpu: None,
         }
     }
 
@@ -83,6 +87,11 @@ impl CaptureBuilder {
         self
     }
 
+    pub fn gpu_buffers(mut self, factory: Arc<dyn GpuBufferFactory>) -> Self {
+        self.gpu = Some(factory);
+        self
+    }
+
     pub async fn start(self) -> Result<Capture> {
         let mode = match self.mode {
             Some(mode) => mode,
@@ -108,6 +117,7 @@ impl CaptureBuilder {
                     flags: self.flags,
                     audio: self.audio,
                     time_scale,
+                    gpu: self.gpu,
                 },
                 sink,
             )

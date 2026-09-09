@@ -15,6 +15,7 @@ workspace = true
 [features]
 default = []
 hardware = ["decklink-sys/hardware"]
+wgpu = ["dep:wgpu"]
 tokio = ["dep:tokio"]
 tracing = ["dep:tracing"]
 
@@ -27,6 +28,27 @@ futures-sink.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 tracing = { version = "0.1", optional = true }
+wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+] }
+wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "dx12"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "MTLBuffer",
+    "MTLDevice",
+    "MTLPixelFormat",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+] }
+wgpu = { version = "30.0.1", optional = true, default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
 
 [dev-dependencies]
 futures-util.workspace = true
@@ -38,6 +60,12 @@ name = "list_devices"
 
 [[example]]
 name = "async_capture"
+
+[[example]]
+name = "capture_stats"
+
+[[example]]
+name = "capture_frame"
 
 [[example]]
 name = "scheduled_playout"

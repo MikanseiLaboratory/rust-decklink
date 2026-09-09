@@ -59,6 +59,10 @@ impl DeckLinkContext {
         Self::new().unwrap_or_else(|_| Self::mock(MockWorld::demo()))
     }
 
+    pub fn is_hardware(&self) -> bool {
+        self.inner.hardware
+    }
+
     pub fn api_version(&self) -> Result<String> {
         if self.inner.hardware {
             decklink_sys::api_version().map_err(|hr| Error::sdk("api_version", crate::error::Hresult(hr)))
