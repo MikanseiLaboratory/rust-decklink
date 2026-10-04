@@ -142,6 +142,18 @@ fn overflow_error_and_stop_closes_stream() {
 }
 
 #[test]
+fn external_key_is_recorded_on_the_mock() {
+    let world = MockWorld::demo();
+    let flag = std::sync::Arc::clone(&world.external_key);
+    let ctx = DeckLinkContext::mock(world);
+    let device = ctx.first_device().unwrap();
+    pollster::block_on(async {
+        let _playout = device.playout().external_key(true).start().await.unwrap();
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+    });
+}
+
+#[test]
 fn playout_reports_completion() {
     let ctx = DeckLinkContext::mock(MockWorld::demo());
     let device = ctx.first_device().unwrap();
