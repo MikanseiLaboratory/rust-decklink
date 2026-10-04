@@ -49,6 +49,8 @@ pub struct MockWorld {
     pub complete_immediately: bool,
     /// Delay between scripted capture events. `None` bursts them immediately.
     pub capture_interval: Option<Duration>,
+    /// Set when playout is enabled with the external keyer.
+    pub external_key: Arc<AtomicBool>,
 }
 
 impl MockWorld {
@@ -86,6 +88,7 @@ impl MockWorld {
             }],
             complete_immediately: true,
             capture_interval: Some(Duration::from_millis(1)),
+            external_key: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -209,6 +212,9 @@ impl Backend for MockBackend {
     fn enable_output(&mut self, config: &OutputConfig, sink: Box<dyn OutputSink>) -> Result<()> {
         let _ = config.pixel_format;
         self.output_audio = config.audio;
+        self.world
+            .external_key
+            .store(config.external_key, Ordering::Relaxed);
         self.output_sink = Some(Arc::from(sink));
         Ok(())
     }

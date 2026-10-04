@@ -261,6 +261,8 @@ unsafe extern "C" {
     pub fn rdl_output_buffered_video(output: Handle, count: *mut u32) -> HResult;
     pub fn rdl_output_buffered_audio(output: Handle, count: *mut u32) -> HResult;
     pub fn rdl_output_flush_audio(output: Handle) -> HResult;
+    pub fn rdl_device_enable_external_key(device: Handle, level: i32) -> HResult;
+    pub fn rdl_device_disable_keyer(device: Handle) -> HResult;
 }
 
 /// Read a NUL-terminated buffer written by the shim.

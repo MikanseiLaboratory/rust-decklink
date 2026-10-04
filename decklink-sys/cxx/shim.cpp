@@ -410,6 +410,8 @@ rdl_hresult rdl_output_stop(rdl_handle, int64_t, int64_t, int64_t *) { return kN
 rdl_hresult rdl_output_buffered_video(rdl_handle, uint32_t *) { return kNotImpl; }
 rdl_hresult rdl_output_buffered_audio(rdl_handle, uint32_t *) { return kNotImpl; }
 rdl_hresult rdl_output_flush_audio(rdl_handle) { return kNotImpl; }
+rdl_hresult rdl_device_enable_external_key(rdl_handle, int32_t) { return kNotImpl; }
+rdl_hresult rdl_device_disable_keyer(rdl_handle) { return kNotImpl; }
 
 }
 
@@ -1470,6 +1472,42 @@ rdl_hresult rdl_output_buffered_audio(rdl_handle output, uint32_t *count)
 rdl_hresult rdl_output_flush_audio(rdl_handle output)
 {
     return output ? static_cast<rdl_hresult>(as<IDeckLinkOutput>(output)->FlushBufferedAudioSamples()) : kInvalidArg;
+}
+
+rdl_hresult rdl_device_enable_external_key(rdl_handle device, int32_t level)
+{
+    if (!device) {
+        return kInvalidArg;
+    }
+    IDeckLinkKeyer *keyer = nullptr;
+    const HRESULT query = as<IDeckLink>(device)->QueryInterface(
+        IID_IDeckLinkKeyer, reinterpret_cast<void **>(&keyer));
+    if (query != S_OK || !keyer) {
+        return static_cast<rdl_hresult>(query);
+    }
+    HRESULT hr = keyer->Enable(true);
+    if (hr == S_OK) {
+        const int clamped = level < 0 ? 0 : (level > 255 ? 255 : level);
+        hr = keyer->SetLevel(static_cast<uint8_t>(clamped));
+    }
+    keyer->Release();
+    return static_cast<rdl_hresult>(hr);
+}
+
+rdl_hresult rdl_device_disable_keyer(rdl_handle device)
+{
+    if (!device) {
+        return kInvalidArg;
+    }
+    IDeckLinkKeyer *keyer = nullptr;
+    const HRESULT query = as<IDeckLink>(device)->QueryInterface(
+        IID_IDeckLinkKeyer, reinterpret_cast<void **>(&keyer));
+    if (query != S_OK || !keyer) {
+        return static_cast<rdl_hresult>(query);
+    }
+    const HRESULT hr = keyer->Disable();
+    keyer->Release();
+    return static_cast<rdl_hresult>(hr);
 }
 
 }

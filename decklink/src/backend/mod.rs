@@ -42,6 +42,8 @@ pub struct OutputConfig {
     pub pixel_format: PixelFormat,
     pub flags: VideoOutputFlags,
     pub audio: Option<AudioConfig>,
+    /// External keyer. The alpha of a BGRA frame is the key.
+    pub external_key: bool,
 }
 
 /// Backend operations run on a dedicated actor thread.
