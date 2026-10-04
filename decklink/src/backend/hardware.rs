@@ -263,6 +263,11 @@ impl Backend for HardwareBackend {
         Error::check("output_enable_video", unsafe {
             decklink_sys::rdl_output_enable_video(self.output, config.mode.id.0, config.flags.0)
         })?;
+        if config.external_key {
+            Error::check("external_key", unsafe {
+                decklink_sys::rdl_device_enable_external_key(self.device, 255)
+            })?;
+        }
         if let Some(audio) = config.audio {
             Error::check("output_enable_audio", unsafe {
                 decklink_sys::rdl_output_enable_audio(
@@ -357,6 +362,7 @@ impl Backend for HardwareBackend {
             let _ = unsafe { decklink_sys::rdl_output_flush_audio(self.output) };
             let _ = unsafe { decklink_sys::rdl_output_disable_audio(self.output) };
             let _ = unsafe { decklink_sys::rdl_output_disable_video(self.output) };
+            let _ = unsafe { decklink_sys::rdl_device_disable_keyer(self.device) };
             let _ = unsafe { decklink_sys::rdl_output_set_callbacks(self.output, std::ptr::null()) };
         }
         if let Some(bridge) = self.output_bridge.take() {
