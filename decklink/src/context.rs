@@ -22,23 +22,25 @@ pub struct DeckLinkContext {
 static HARDWARE: OnceLock<std::result::Result<DeckLinkContext, Error>> = OnceLock::new();
 
 impl DeckLinkContext {
+    /// A fresh hardware actor. Each call owns its own device, so capture and
+    /// playout on different connectors can run at the same time.
+    pub fn session() -> Result<Self> {
+        let (actor, join) = ActorHandle::spawn(|| {
+            Ok(Box::new(crate::backend::hardware::HardwareBackend::new()?) as Box<dyn Backend>)
+        })?;
+        Ok(Self {
+            inner: Arc::new(SharedContext {
+                actor,
+                hardware: true,
+                _join: Mutex::new(Some(join)),
+            }),
+        })
+    }
+
     /// Connect to installed DeckLink drivers. Falls back to a clear error when
-    /// the hardware shim is not available.
+    /// the hardware shim is not available. The first successful call is reused.
     pub fn new() -> Result<Self> {
-        HARDWARE
-            .get_or_init(|| {
-                let (actor, join) = ActorHandle::spawn(|| {
-                    Ok(Box::new(crate::backend::hardware::HardwareBackend::new()?) as Box<dyn Backend>)
-                })?;
-                Ok(Self {
-                    inner: Arc::new(SharedContext {
-                        actor,
-                        hardware: true,
-                        _join: Mutex::new(Some(join)),
-                    }),
-                })
-            })
-            .clone()
+        HARDWARE.get_or_init(Self::session).clone()
     }
 
     /// In-memory devices for tests and examples that must run without a card.
