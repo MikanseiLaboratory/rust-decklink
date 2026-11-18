@@ -10,7 +10,7 @@ use support::{capture_frames, open_context, parse_args, pixel_format, select_dev
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
     pollster::block_on(async {
-        let context = open_context(&args)?;
+        let context = open_context()?;
         let device = select_device(&context, &args)?;
         let mode = select_mode(&device, &args)?;
         let target = capture_frames(&args, &mode);

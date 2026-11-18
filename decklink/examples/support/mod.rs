@@ -12,10 +12,6 @@ use decklink::{
 #[derive(Debug, Parser)]
 #[command(version, about = "DeckLink capture / playout example")]
 pub struct Args {
-    /// Fail if the DeckLink driver / hardware shim is missing
-    #[arg(long = "hardware", env = "DECKLINK_REQUIRE_HARDWARE")]
-    pub require_hardware: bool,
-
     /// Card index from list_devices
     #[arg(long, env = "DECKLINK_DEVICE")]
     pub device: Option<usize>,
@@ -67,21 +63,17 @@ pub fn parse_args() -> Result<Args> {
     Ok(Args::parse())
 }
 
-pub fn open_context(args: &Args) -> Result<DeckLinkContext> {
-    if args.require_hardware {
-        return DeckLinkContext::new().map_err(|err| {
-            Error::new(
-                ErrorKind::DriverNotFound,
-                "example",
-                format!("{err}; build with `--features hardware` and set DECKLINK_SDK_DIR to the SDK 16.0 root"),
-            )
-        });
-    }
-    let context = DeckLinkContext::connect();
-    if !context.is_hardware() {
-        eprintln!("using mock backend (no card or hardware feature). pass --hardware to require a device.");
-    }
-    Ok(context)
+pub fn open_context() -> Result<DeckLinkContext> {
+    DeckLinkContext::new().map_err(|err| {
+        Error::new(
+            err.kind,
+            "example",
+            format!(
+                "{err}; build with `--features hardware` and install the Blackmagic \
+                 Desktop Video driver"
+            ),
+        )
+    })
 }
 
 pub fn select_device(context: &DeckLinkContext, args: &Args) -> Result<Device> {

@@ -28,3 +28,22 @@ jobs:
         run: cargo test --workspace
       - name: Examples
         run: cargo test --workspace --examples
+
+  # Compile the real DeckLink SDK shim (vendored headers) on every OS. The
+  # tests run without a card: the shim reports the driver state and the ABI
+  # test asserts the no-driver behaviour per platform.
+  hardware:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile the SDK shim
+        run: cargo build -p decklink-sys --features hardware
+      - name: Test with the real shim
+        run: cargo test --workspace --features hardware
+      - name: Examples with the real shim
+        run: cargo build --workspace --examples --features hardware

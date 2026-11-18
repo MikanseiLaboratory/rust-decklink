@@ -59,7 +59,7 @@ impl GpuBufferFactory for WgpuSharedFactory {
 
 #[cfg(target_os = "macos")]
 fn allocate_metal(device: &wgpu::Device, request: GpuBufferRequest) -> Result<AllocatedGpuBuffer> {
-    use objc2_metal::{MTLDevice, MTLResourceOptions};
+    use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 
     let mtl = unsafe {
         device
@@ -75,7 +75,9 @@ fn allocate_metal(device: &wgpu::Device, request: GpuBufferRequest) -> Result<Al
     let cpu_ptr = raw_buf.contents().as_ptr().cast::<u8>();
     let native = objc2::rc::Retained::as_ptr(&raw_buf) as *mut c_void;
     let handle = NativeGpuHandle::MetalBuffer(NonNull::new(native).expect("mtl buffer"));
-    let hal = unsafe { wgpu::hal::metal::Device::buffer_from_raw(&raw_buf, size as u64) };
+    // The HAL buffer keeps its own retain, so the wgpu buffer below owns the
+    // MTLBuffer's lifetime; no Send closure needs to hold the object.
+    let hal = unsafe { wgpu::hal::metal::Device::buffer_from_raw(raw_buf.clone(), size as u64) };
     let wgpu_buffer = unsafe {
         device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
             hal,
@@ -87,6 +89,7 @@ fn allocate_metal(device: &wgpu::Device, request: GpuBufferRequest) -> Result<Al
             },
         )
     };
+    drop(raw_buf);
     Ok(AllocatedGpuBuffer {
         backend: GpuBackend::Metal,
         cpu_ptr,
@@ -95,8 +98,6 @@ fn allocate_metal(device: &wgpu::Device, request: GpuBufferRequest) -> Result<Al
         request,
         wgpu_buffer: Some(wgpu_buffer),
         wgpu_texture: None,
-        drop: Some(Box::new(move || {
-            drop(raw_buf);
-        })),
+        drop: None,
     })
 }

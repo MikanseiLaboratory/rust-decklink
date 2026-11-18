@@ -2,7 +2,9 @@
 
 Blackmagic DeckLink の映像・音声入出力を、Windows / macOS / Linux から同じ Rust API で扱うクレートです。公開する非同期面は特定ランタイムに依存せず、`Stream` と `Sink` だけを使います。
 
-SDK そのものはこのリポジトリに含めていません。実機を使うときは Blackmagic の Desktop Video ドライバと [DeckLink SDK 16.0](https://www.blackmagicdesign.com/desktopvideo_sdk) を別途用意してください。ライセンス条件は [NOTICE](NOTICE) に書いてあります。
+実機を使うときは Blackmagic の Desktop Video ドライバが必要です。SDK 16.0 の API ヘッダは BSL ライセンスで `decklink-sys/vendor/decklink` に同梱しているので、SDK を別途ダウンロードしなくても `--features hardware` で 3 OS とも実 shim がビルドできます。ライセンス条件は [NOTICE](NOTICE) と [decklink-sys/vendor/decklink/README.md](decklink-sys/vendor/decklink/README.md) に書いてあります。
+
+初期リリースでは ancillary / HDR / profile / DeckControl / IP / encoder は扱いません。
 
 ## できること
 
@@ -10,9 +12,8 @@ SDK そのものはこのリポジトリに含めていません。実機を使�
 - 映像・音声の capture（形式変更通知つき）
 - scheduled playback（preroll、完了結果、停止待ち）
 - bounded queue による overflow 制御
-- SDK なしで回る mock バックエンド
 
-初期リリースでは ancillary / HDR / profile / DeckControl / IP / encoder は扱いません。
+モックバックエンドと暗黙フォールバックはありません。ドライバが無い環境では `DeckLinkContext::new()` が失敗します。
 
 ## 使い方
 
@@ -20,7 +21,7 @@ SDK そのものはこのリポジトリに含めていません。実機を使�
 use decklink::{DeckLinkContext, PixelFormat};
 use futures_util::StreamExt;
 
-let context = DeckLinkContext::connect(); // 実機がなければ mock
+let context = DeckLinkContext::new()?; // ドライバが無ければここで失敗する
 let device = context.first_device()?;
 let mode = device.display_modes()?.into_iter().next().unwrap();
 
@@ -43,42 +44,40 @@ capture.shutdown().await?;
 ## ビルド
 
 ```bash
-cargo test --workspace
+cargo test --workspace                         # stub shim（SDK 不要）
+cargo test --workspace --features hardware     # 実 SDK shim（ヘッダ同梱、ドライバ不要）
 ```
 
-実機用 shim を入れる場合:
+`--features hardware` は vendored ヘッダを使うので追加設定は不要です。`DECKLINK_SDK_DIR` に完全な SDK 16.0 を指定するとそちらを優先します。指定したディレクトリに対象 OS のヘッダが無い場合、stub に黙って落ちるのではなくビルドエラーになります。明示的に stub を使うのは `DECKLINK_FORCE_STUB=1` だけです。
 
-```bash
-set DECKLINK_SDK_DIR=C:\path\to\Blackmagic DeckLink SDK 16.0
-cargo test --workspace --features hardware
-```
-
-Windows の hardware ビルドには Visual Studio の C++ ツールと `midl.exe` が必要です。Linux は実行時に `libDeckLinkAPI.so` を、macOS は `DeckLinkAPI.framework` を読みます。SDK が見つからないときは stub になり、`DeckLinkContext::new()` は失敗します。mock と `connect()` はそのまま使えます。
+- Windows: ビルドには Visual Studio の C++ ツールと `midl.exe` が必要です
+- Linux: 実行時に `libDeckLinkAPI.so`（Desktop Video ドライバ）を読みます
+- macOS: 実行時に `/Library/Frameworks/DeckLinkAPI.framework` を読みます
 
 ## 実機での確認
 
-カードが刺さっている PC で、Desktop Video ドライバと SDK 16.0 を入れてから次を実行します。`--hardware` を付けると mock に落ちません。失敗したらドライバか `DECKLINK_SDK_DIR` を先に疑ってください。
+カードが刺さっている PC で Desktop Video ドライバを入れてから次を実行します。ドライバが無ければ `new()` の時点で明確なエラーになります。
 
 ```bash
-set DECKLINK_SDK_DIR=C:\path\to\Blackmagic DeckLink SDK 16.0
-
-cargo run -p decklink --features hardware --example list_devices -- --hardware
-cargo run -p decklink --features hardware --example capture_stats -- --hardware --seconds 10
-cargo run -p decklink --features hardware --example capture_frame -- --hardware --out frame.uyvy
-cargo run -p decklink --features hardware --example scheduled_playout -- --hardware --seconds 10
-cargo run -p decklink --features hardware --example colorbars -- --hardware --seconds 10
-cargo run -p decklink --features hardware,wgpu --example wgpu_colorbars -- --hardware --seconds 10
+cargo run -p decklink --features hardware --example list_devices
+cargo run -p decklink --features hardware --example capture_stats -- --seconds 10
+cargo run -p decklink --features hardware --example capture_frame -- --out frame.uyvy
+cargo run -p decklink --features hardware --example scheduled_playout -- --seconds 10
+cargo run -p decklink --features hardware --example colorbars -- --seconds 10
+cargo run -p decklink --features hardware,wgpu --example wgpu_colorbars -- --seconds 10
 ```
 
 `colorbars` と `wgpu_colorbars` は SMPTE RP 219 HD カラーバー、1 kHz（-20 dBFS）ステレオ、水平スクロールを出します。
 
-共通オプションは `--device 0`、`--mode 1080p30`、`--frames 150`、`--audio` です。環境変数 `DECKLINK_DEVICE` / `DECKLINK_MODE` / `DECKLINK_SECONDS` / `DECKLINK_REQUIRE_HARDWARE` でも同じ指定ができます。
+共通オプションは `--device 0`、`--mode 1080p30`、`--frames 150`、`--audio` です。環境変数 `DECKLINK_DEVICE` / `DECKLINK_MODE` / `DECKLINK_SECONDS` でも同じ指定ができます。
 
 `capture_stats` の `no_source` がフレーム数と同じなら、ケーブルか信号源を見てください。`capture_frame` で書いた UYVY は次で再生できます。
 
 ```bash
 ffplay -f rawvideo -pixel_format uyvy422 -video_size 1920x1080 frame.uyvy
 ```
+
+CI は 3 OS で実 shim のビルドとテストを回しています。実機での最終確認（issues #2 / #3）にはカードが必要です。
 
 ## GPU バッファ（eiviz / wgpu）
 
@@ -100,7 +99,7 @@ while let Some(Ok(CaptureEvent::Sample(sample))) = capture.next().await {
     if let Some(frame) = &sample.video {
         let _pixels = frame.map_read()?.as_bytes();
         if let Some(gpu) = frame.gpu() {
-            // 任意: Metal では gpu.wgpu_buffer が同じメモリ。Windows では cpu_ptr のみ。
+            // 任意: Metal では gpu.wgpu_buffer が同じメモリ。Windows / Linux では cpu_ptr のみ。
             let _ = gpu.packed_uyvy_extent();
         }
     }
@@ -121,4 +120,4 @@ while let Some(Ok(CaptureEvent::Sample(sample))) = capture.next().await {
 
 ## ライセンス
 
-MIT または Apache-2.0 です。DeckLink SDK とドライバは Blackmagic Design の EULA が別途かかります。
+MIT または Apache-2.0 です。DeckLink SDK ヘッダは Blackmagic Source License（NOTICE 参照）で同梱しています。ドライバとランタイムバイナリは Blackmagic Design の EULA が別途かかります。

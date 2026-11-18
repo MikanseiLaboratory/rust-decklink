@@ -1,5 +1,8 @@
+//! DeckLink backend operations. The hardware backend is the only
+//! implementation; the SDK shim answers with `E_NOTIMPL` when the crate was
+//! built without the `hardware` feature.
+
 pub mod hardware;
-pub mod mock;
 
 use std::sync::Arc;
 
@@ -18,8 +21,6 @@ pub struct DeviceSnapshot {
 pub trait InputSink: Send + Sync {
     fn frame(&self, video: Option<crate::frame::CapturedVideoFrame>, audio: Option<crate::audio::CapturedAudioPacket>);
     fn format_changed(&self, format: DetectedFormat);
-    /// Scripted / hardware end-of-stream. Default is a no-op.
-    fn ended(&self) {}
 }
 
 pub trait OutputSink: Send + Sync {

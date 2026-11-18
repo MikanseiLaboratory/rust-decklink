@@ -11,7 +11,7 @@ use support::{open_context, parse_args, pixel_format, select_device, select_mode
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
     pollster::block_on(async {
-        let context = open_context(&args)?;
+        let context = open_context()?;
         let device = select_device(&context, &args)?;
         let mode = select_mode(&device, &args)?;
         let out = args.out.clone().unwrap_or_else(|| PathBuf::from("frame.uyvy"));

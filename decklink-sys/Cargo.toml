@@ -8,15 +8,19 @@ repository.workspace = true
 authors.workspace = true
 description = "Low-level C ABI bindings for Blackmagic DeckLink SDK 16.0"
 links = "decklink_shim"
-exclude = ["cxx/README.md"]
+keywords = ["decklink", "blackmagic", "sdi", "ffi"]
+categories = ["external-ffi-bindings", "hardware-support"]
 
 [lints]
 workspace = true
 
 [features]
 default = []
-# Compile the C++ shim against a local DeckLink SDK. Without this feature the
-# crate still builds and exposes the same symbols as stubs.
+# Compile the C++ shim against the real DeckLink SDK headers. The BSL headers
+# are bundled under vendor/decklink, so this builds on Windows, macOS and
+# Linux out of the box; set DECKLINK_SDK_DIR to prefer a full SDK install.
+# Without this feature the crate still builds and exposes the same symbols
+# as stubs.
 hardware = []
 
 [build-dependencies]
