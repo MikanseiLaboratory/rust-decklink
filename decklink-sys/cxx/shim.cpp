@@ -18,7 +18,22 @@
 #include "DeckLinkAPI.h"
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+// The macOS SDK relies on CFPlugInCOM.h, which declares IUnknownUUID but not
+// IID_IUnknown. Define the COM IID the same way FFmpeg's decklink backend does.
+#ifndef IID_IUnknown
+#define IID_IUnknown CFUUIDGetUUIDBytes(IUnknownUUID)
 #endif
+#endif
+#endif
+#endif
+
+#ifdef RDL_HARDWARE
+#ifndef _WIN32
+// Defined by the SDK's DeckLinkAPIDispatch.cpp that the build compiles next to
+// this shim; DeckLinkAPI.h itself does not declare it, so it keeps default
+// C++ linkage. The framework / shared library only loads when the Desktop
+// Video driver is installed.
+bool IsDeckLinkAPIPresent(void);
 #endif
 #endif
 
@@ -449,7 +464,32 @@ void rdl_uninitialize(void)
 
 int32_t rdl_hardware_available(void)
 {
-    return 1;
+#ifdef _WIN32
+    // The Desktop Video driver registers the DeckLink COM classes. If the
+    // class cannot be created the driver is not installed. Create a temporary
+    // apartment when the caller has not initialized COM on this thread yet.
+    bool com_init = false;
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (init == S_OK) {
+        com_init = true;
+    } else if (init != S_FALSE && init != RPC_E_CHANGED_MODE) {
+        return 0;
+    }
+    IDeckLinkAPIInformation *info = nullptr;
+    const HRESULT hr = CoCreateInstance(
+        CLSID_CDeckLinkAPIInformation, nullptr, CLSCTX_ALL, IID_IDeckLinkAPIInformation, reinterpret_cast<void **>(&info));
+    if (SUCCEEDED(hr) && info) {
+        info->Release();
+    }
+    if (com_init) {
+        CoUninitialize();
+    }
+    return SUCCEEDED(hr) ? 1 : 0;
+#else
+    // See the IsDeckLinkAPIPresent declaration near the top of this file. The
+    // framework / shared library only loads when the driver is installed.
+    return IsDeckLinkAPIPresent() ? 1 : 0;
+#endif
 }
 
 rdl_hresult rdl_api_version(char *buf, size_t len)

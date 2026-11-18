@@ -14,6 +14,12 @@ use std::ptr;
 pub type HResult = i32;
 pub type Handle = *mut c_void;
 
+/// Whether the C++ shim was compiled against the real DeckLink SDK headers.
+///
+/// `false` means the stub is linked: every call returns `E_NOTIMPL` and
+/// `rdl_hardware_available` reports 0.
+pub const HARDWARE_COMPILED: bool = cfg!(decklink_hardware);
+
 pub const S_OK: HResult = 0;
 pub const S_FALSE: HResult = 1;
 pub const E_NOTIMPL: HResult = 0x8000_0001u32 as HResult;

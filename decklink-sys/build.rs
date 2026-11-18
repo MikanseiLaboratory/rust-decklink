@@ -5,6 +5,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=cxx/decklink_c.h");
     println!("cargo:rerun-if-changed=cxx/shim.cpp");
+    println!("cargo:rerun-if-changed=vendor/decklink");
     println!("cargo:rerun-if-env-changed=DECKLINK_SDK_DIR");
     println!("cargo:rerun-if-env-changed=DECKLINK_FORCE_STUB");
     println!("cargo:rerun-if-env-changed=MIDL");
@@ -15,18 +16,15 @@ fn main() {
         return;
     }
 
-    let Some(sdk) = find_sdk() else {
-        println!(
-            "cargo:warning=DeckLink SDK not found; building stub bindings. Set DECKLINK_SDK_DIR to enable hardware."
-        );
-        compile_stub();
-        return;
+    // The hardware feature is an explicit request for the real shim. A missing
+    // SDK is a build error, never a silent stub fallback.
+    let sdk = match find_sdk() {
+        Ok(sdk) => sdk,
+        Err(err) => panic!("decklink-sys: {err}"),
     };
-
     println!("cargo:rerun-if-changed={}", sdk.display());
     if let Err(err) = compile_hardware(&sdk) {
-        println!("cargo:warning=DeckLink hardware shim failed ({err}); falling back to stub.");
-        compile_stub();
+        panic!("decklink-sys: DeckLink hardware shim failed: {err}");
     }
 }
 
@@ -271,14 +269,46 @@ fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
-fn find_sdk() -> Option<PathBuf> {
+/// Platform include directory and the header that must exist inside it.
+fn os_include(os: &str) -> Result<(&'static str, &'static str), String> {
+    match os {
+        "windows" => Ok(("Win", "DeckLinkAPI.idl")),
+        "linux" => Ok(("Linux", "DeckLinkAPI.h")),
+        "macos" => Ok(("Mac", "DeckLinkAPI.h")),
+        other => Err(format!("unsupported target OS {other}")),
+    }
+}
+
+/// Does `sdk` carry the headers the current target OS needs?
+fn sdk_has_target_headers(sdk: &Path, os: &str) -> bool {
+    let Ok((os_dir, header)) = os_include(os) else {
+        return false;
+    };
+    sdk.join(os_dir).join("include").join(header).exists()
+}
+
+fn find_sdk() -> Result<PathBuf, String> {
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    os_include(&os)?; // fail fast on unsupported targets
+
+    // An explicit DECKLINK_SDK_DIR must actually work for this target.
     if let Ok(dir) = env::var("DECKLINK_SDK_DIR") {
-        let path = PathBuf::from(dir);
-        if looks_like_sdk(&path) {
-            return Some(path);
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            let path = PathBuf::from(dir);
+            if sdk_has_target_headers(&path, &os) {
+                return Ok(path);
+            }
+            return Err(format!(
+                "DECKLINK_SDK_DIR={dir:?} has no {os} headers (expected {}/include); \
+                 point it at a full DeckLink SDK 16.0, or unset it to build against \
+                 the headers bundled with decklink-sys",
+                os_include(&os).expect("validated").0,
+            ));
         }
     }
 
+    // Well-known install locations.
     let mut candidates = Vec::new();
     if let Ok(home) = env::var("USERPROFILE") {
         candidates.push(PathBuf::from(home).join(r"Downloads\Blackmagic DeckLink SDK 16.0"));
@@ -293,12 +323,21 @@ fn find_sdk() -> Option<PathBuf> {
     candidates.push(PathBuf::from(r"C:\Blackmagic DeckLink SDK 16.0"));
     candidates.push(PathBuf::from("/usr/src/decklink-sdk"));
     candidates.push(PathBuf::from("/opt/blackmagic/DeckLinkSDK"));
+    if let Some(found) = candidates.into_iter().find(|path| sdk_has_target_headers(path, &os)) {
+        return Ok(found);
+    }
 
-    candidates.into_iter().find(|path| looks_like_sdk(path))
-}
+    // Headers bundled with this crate (BSL, see vendor/decklink/README.md).
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let vendor = manifest.join("vendor").join("decklink");
+    if sdk_has_target_headers(&vendor, &os) {
+        return Ok(vendor);
+    }
 
-fn looks_like_sdk(path: &Path) -> bool {
-    path.join("Linux").join("include").join("DeckLinkAPI.h").exists()
-        || path.join("Win").join("include").join("DeckLinkAPI.idl").exists()
-        || path.join("Mac").join("include").join("DeckLinkAPI.h").exists()
+    Err(
+        "no DeckLink SDK 16.0 headers for this target were found; DECKLINK_SDK_DIR is unset, \
+         the well-known locations have none, and the bundled decklink-sys/vendor/decklink \
+         headers are missing. Restore the vendored headers or set DECKLINK_SDK_DIR."
+            .into(),
+    )
 }

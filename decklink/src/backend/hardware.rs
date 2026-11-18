@@ -52,15 +52,17 @@ impl HardwareBackend {
             return Err(Error::new(
                 ErrorKind::DriverNotFound,
                 "initialize",
-                "hardware shim was not compiled; enable the `hardware` feature and set DECKLINK_SDK_DIR",
+                "hardware shim was not compiled; rebuild with the `hardware` feature",
             ));
         }
         Error::check("initialize", hr)?;
         if unsafe { decklink_sys::rdl_hardware_available() } == 0 {
             return Err(Error::new(
-                ErrorKind::AbiMismatch,
+                ErrorKind::DriverNotFound,
                 "initialize",
-                "DeckLink shim built without a usable SDK",
+                "Desktop Video driver not found; install the Blackmagic Desktop Video driver \
+                 (Windows: DeckLink COM classes, macOS: /Library/Frameworks/DeckLinkAPI.framework, \
+                 Linux: libDeckLinkAPI.so)",
             ));
         }
         Ok(Self {
