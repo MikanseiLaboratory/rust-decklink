@@ -199,6 +199,8 @@ rdl_hresult rdl_output_stop(rdl_handle output, int64_t stop_time, int64_t time_s
 rdl_hresult rdl_output_buffered_video(rdl_handle output, uint32_t *count);
 rdl_hresult rdl_output_buffered_audio(rdl_handle output, uint32_t *count);
 rdl_hresult rdl_output_flush_audio(rdl_handle output);
+rdl_hresult rdl_device_enable_external_key(rdl_handle device, int32_t level);
+rdl_hresult rdl_device_disable_keyer(rdl_handle device);
 
 #ifdef __cplusplus
 }

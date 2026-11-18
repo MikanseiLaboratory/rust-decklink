@@ -33,6 +33,7 @@ pub struct PlayoutBuilder {
     pixel_format: PixelFormat,
     flags: VideoOutputFlags,
     audio: Option<AudioConfig>,
+    external_key: bool,
 }
 
 impl PlayoutBuilder {
@@ -43,7 +44,17 @@ impl PlayoutBuilder {
             pixel_format: PixelFormat::YUV_8BIT,
             flags: VideoOutputFlags::DEFAULT,
             audio: None,
+            external_key: false,
         }
+    }
+
+    /// Enable `IDeckLinkKeyer` in external mode. Frames must be BGRA; alpha is the key.
+    pub fn external_key(mut self, enable: bool) -> Self {
+        self.external_key = enable;
+        if enable {
+            self.pixel_format = PixelFormat::BGRA_8BIT;
+        }
+        self
     }
 
     pub fn video(mut self, mode: DisplayMode, pixel_format: PixelFormat) -> Self {
@@ -80,6 +91,7 @@ impl PlayoutBuilder {
                     pixel_format: self.pixel_format,
                     flags: self.flags,
                     audio: self.audio,
+                    external_key: self.external_key,
                 },
                 sink,
             )
