@@ -21,23 +21,25 @@ pub struct DeckLinkContext {
 static HARDWARE: OnceLock<std::result::Result<DeckLinkContext, Error>> = OnceLock::new();
 
 impl DeckLinkContext {
+    /// A fresh hardware actor. Each call owns its own device, so capture and
+    /// playout on different connectors can run at the same time.
+    pub fn session() -> Result<Self> {
+        let (actor, join) = ActorHandle::spawn(|| Ok(Box::new(HardwareBackend::new()?) as Box<dyn Backend>))?;
+        Ok(Self {
+            inner: Arc::new(SharedContext {
+                actor,
+                _join: Mutex::new(Some(join)),
+            }),
+        })
+    }
+
     /// Connect to the installed DeckLink drivers.
     ///
     /// Fails with a clear error when the hardware shim was not compiled or the
     /// Desktop Video driver is missing. There is no fallback backend. The
     /// first successful call is reused process-wide.
     pub fn new() -> Result<Self> {
-        HARDWARE
-            .get_or_init(|| {
-                let (actor, join) = ActorHandle::spawn(|| Ok(Box::new(HardwareBackend::new()?) as Box<dyn Backend>))?;
-                Ok(Self {
-                    inner: Arc::new(SharedContext {
-                        actor,
-                        _join: Mutex::new(Some(join)),
-                    }),
-                })
-            })
-            .clone()
+        HARDWARE.get_or_init(Self::session).clone()
     }
 
     /// Version string reported by the SDK / shim.
