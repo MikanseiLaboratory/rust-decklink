@@ -2,6 +2,8 @@
 
 Blackmagic DeckLink の映像・音声入出力を、Windows / macOS / Linux から同じ Rust API で扱うクレートです。公開する非同期面は特定ランタイムに依存せず、`Stream` と `Sink` だけを使います。
 
+crates.io では `rust-decklink` と `decklink-sys` の名前で公開しています（`decklink` の名前は 2023 年から別プロジェクト [Julusian/decklink-rs](https://github.com/Julusian/decklink-rs) が所有しているため）。ライブラリ名は `decklink` のままなので、依存のキーだけを `rust-decklink` にすれば `use decklink::…` は変わりません。
+
 実機を使うときは Blackmagic の Desktop Video ドライバが必要です。SDK 16.0 の API ヘッダは BSL ライセンスで `decklink-sys/vendor/decklink` に同梱しているので、SDK を別途ダウンロードしなくても `--features hardware` で 3 OS とも実 shim がビルドできます。ライセンス条件は [NOTICE](NOTICE) と [decklink-sys/vendor/decklink/README.md](decklink-sys/vendor/decklink/README.md) に書いてあります。
 
 初期リリースでは ancillary / HDR / profile / DeckControl / IP / encoder は扱いません。
