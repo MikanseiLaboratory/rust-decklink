@@ -1,8 +1,11 @@
 name: publish
 
-# Publishes decklink-sys and decklink to crates.io with Trusted Publishing:
-# the job exchanges this repository's GitHub OIDC identity for a short-lived
-# crates.io token, so no long-lived API token is stored anywhere.
+# Publishes decklink-sys and rust-decklink to crates.io with Trusted
+# Publishing: the job exchanges this repository's GitHub OIDC identity for a
+# short-lived crates.io token, so no long-lived API token is stored anywhere.
+# The high-level package is published under the repository name because
+# `decklink` on crates.io is owned by Julusian/decklink-rs; the library target
+# inside it is still called `decklink`.
 #
 # One-time setup by the crate owner (crates.io requires the crate to exist
 # before a trusted publisher can be registered):
@@ -39,7 +42,7 @@ jobs:
         run: cargo publish -p decklink-sys
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-      - name: Publish decklink
-        run: cargo publish -p decklink
+      - name: Publish rust-decklink
+        run: cargo publish -p rust-decklink
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

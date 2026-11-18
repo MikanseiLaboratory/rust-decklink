@@ -1,5 +1,5 @@
 [package]
-name = "decklink"
+name = "rust-decklink"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,15 @@ description = "Safe, cross-platform, runtime-agnostic DeckLink capture and playo
 readme = "../README.md"
 keywords = ["decklink", "blackmagic", "sdi", "capture", "video"]
 categories = ["api-bindings", "hardware-support", "multimedia::video"]
+
+# The crate is published under the repository's name because `decklink` on
+# crates.io has belonged to a different project (Julusian/decklink-rs) since
+# 2023. The library target keeps the `decklink` name so existing consumers
+# keep their `use decklink::…` imports; only the dependency key changes to
+# `rust-decklink`.
+[lib]
+name = "decklink"
+path = "src/lib.rs"
 
 [lints]
 workspace = true
