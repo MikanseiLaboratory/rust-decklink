@@ -1,0 +1,45 @@
+name: publish
+
+# Publishes decklink-sys and decklink to crates.io with Trusted Publishing:
+# the job exchanges this repository's GitHub OIDC identity for a short-lived
+# crates.io token, so no long-lived API token is stored anywhere.
+#
+# One-time setup by the crate owner (crates.io requires the crate to exist
+# before a trusted publisher can be registered):
+#   1. Publish the first version manually:
+#        cargo publish -p decklink-sys
+#        cargo publish -p decklink
+#   2. On each crate's crates.io settings page add a trusted publisher:
+#        Repository owner: MikanseiLaboratory
+#        Repository name:  rust-decklink
+#        Workflow:         publish.yml
+#        Environment:     crates-io
+#   3. Create the `crates-io` GitHub environment in this repository.
+# After that, this workflow is the only publishing path needed.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Authenticate to crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish decklink-sys
+        run: cargo publish -p decklink-sys
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Publish decklink
+        run: cargo publish -p decklink
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

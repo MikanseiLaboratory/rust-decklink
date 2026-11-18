@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Safe, cross-platform, runtime-agnostic DeckLink capture and playout"
 readme = "../README.md"
+keywords = ["decklink", "blackmagic", "sdi", "capture", "video"]
+categories = ["api-bindings", "hardware-support", "multimedia::video"]
 
 [lints]
 workspace = true
@@ -21,7 +23,7 @@ tracing = ["dep:tracing"]
 
 [dependencies]
 bitflags.workspace = true
-decklink-sys = { path = "../decklink-sys" }
+decklink-sys = { path = "../decklink-sys", version = "0.1.0" }
 futures-channel.workspace = true
 futures-core.workspace = true
 futures-sink.workspace = true
