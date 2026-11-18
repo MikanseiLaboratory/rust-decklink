@@ -13,7 +13,7 @@ use support::{
 fn main() -> decklink::Result<()> {
     let args = parse_args()?;
     pollster::block_on(async {
-        let context = open_context(&args)?;
+        let context = open_context()?;
         let device = select_device(&context, &args)?;
         let mode = select_mode(&device, &args)?;
         let total = planned_frames(&args, &mode);

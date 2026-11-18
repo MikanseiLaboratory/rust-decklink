@@ -21,7 +21,7 @@ fn main() -> decklink::Result<()> {
             factory.backend()
         );
 
-        let context = open_context(&args)?;
+        let context = open_context()?;
         let device = select_device(&context, &args)?;
         let mode = select_mode(&device, &args)?;
         let total = planned_frames(&args, &mode);

@@ -4,13 +4,9 @@ mod support;
 use support::{open_context, parse_args};
 
 fn main() -> decklink::Result<()> {
-    let args = parse_args()?;
-    let context = open_context(&args)?;
-    println!(
-        "backend={} api={}",
-        if context.is_hardware() { "hardware" } else { "mock" },
-        context.api_version()?
-    );
+    let _args = parse_args()?;
+    let context = open_context()?;
+    println!("api={}", context.api_version()?);
     let devices = context.devices()?;
     if devices.is_empty() {
         println!("no devices");

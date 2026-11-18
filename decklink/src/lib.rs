@@ -1,7 +1,8 @@
 //! Safe, runtime-agnostic bindings for Blackmagic DeckLink capture and playout.
 //!
 //! The public async surface is [`futures_core::Stream`] / [`futures_sink::Sink`].
-//! DeckLink COM objects stay on a dedicated actor thread.
+//! DeckLink COM objects stay on a dedicated actor thread. Without the
+//! `hardware` feature the SDK shim is a stub that rejects every call.
 
 mod actor;
 mod audio;
@@ -19,7 +20,6 @@ mod state;
 mod time;
 
 pub use audio::{AudioConfig, CapturedAudioPacket, SampleType, ScheduledAudioPacket, remaining_audio};
-pub use backend::mock::{MockAudio, MockCaptureEvent, MockVideo, MockWorld};
 pub use capture::{Capture, CaptureBuilder, CaptureError, CaptureEvent, CaptureSample};
 pub use context::DeckLinkContext;
 pub use device::{Device, DeviceId, DeviceInfo};
@@ -39,7 +39,7 @@ pub use queue::{OverflowInfo, OverflowPolicy};
 pub use state::SessionState;
 pub use time::Time;
 
-/// Installed driver / shim version string.
+/// Version string reported by the SDK / shim the crate was built against.
 pub fn api_version() -> Result<String> {
-    DeckLinkContext::connect().api_version()
+    decklink_sys::api_version().map_err(|hr| Error::sdk("api_version", Hresult(hr)))
 }
